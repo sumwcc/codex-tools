@@ -660,19 +660,24 @@ fn extract_auth(auth_json: &Value) -> Result<ExtractedAuth, String> {
     let mode = auth_json
         .get("auth_mode")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    if !(mode.eq_ignore_ascii_case("chatgpt") || mode.eq_ignore_ascii_case("chatgpt_auth_tokens")) {
-        return Err(
-            "当前账号不是 ChatGPT 登录模式，无法读取 Codex 5h/1week 用量。请先执行 codex login。"
-                .to_string(),
-        );
-    }
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
     let tokens = auth_json
         .get("tokens")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "auth.json 缺少 tokens 字段".to_string())?;
+        .and_then(Value::as_object);
+    let tokens = match tokens {
+        Some(value) => value,
+        None => {
+            if !mode.is_empty() && mode != "chatgpt" && mode != "chatgpt_auth_tokens" {
+                return Err(
+                    "当前账号不是 ChatGPT 登录模式，无法读取 Codex 5h/1week 用量。请先执行 codex login。"
+                        .to_string(),
+                );
+            }
+            return Err("当前未检测到 ChatGPT 登录令牌，请先执行 codex login。".to_string());
+        }
+    };
 
     let access_token = tokens
         .get("access_token")
