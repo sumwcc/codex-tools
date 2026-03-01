@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use tauri::AppHandle;
 use tauri::State;
+use tauri::WindowEvent;
 
 use models::AccountSummary;
 use models::AppSettings;
@@ -318,6 +319,15 @@ fn force_stop_running_codex() {
     thread::sleep(Duration::from_millis(220));
 }
 
+fn handle_window_close_to_background(window: &tauri::Window, event: &WindowEvent) {
+    if let WindowEvent::CloseRequested { api, .. } = event {
+        api.prevent_close();
+        if let Err(err) = window.hide() {
+            log::warn!("隐藏窗口失败: {err}");
+        }
+    }
+}
+
 // ===== App Bootstrap =====
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -330,6 +340,7 @@ pub fn run() {
             None,
         ))
         .on_menu_event(tray::handle_status_bar_menu_event)
+        .on_window_event(handle_window_close_to_background)
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
