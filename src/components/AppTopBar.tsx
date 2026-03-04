@@ -1,3 +1,6 @@
+import type { MouseEvent } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 type AppTopBarProps = {
   onOpenSettings: () => void;
   onCheckUpdate: () => void;
@@ -55,9 +58,25 @@ export function AppTopBar({
   refreshing,
 }: AppTopBarProps) {
   const checking = checkingUpdate || installingUpdate;
+  const appWindow = getCurrentWindow();
+
+  const handleDragMouseDown = (event: MouseEvent<HTMLElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.closest(
+        "button, a, input, textarea, select, label, [role='button'], .topActions",
+      )
+    ) {
+      return;
+    }
+    void appWindow.startDragging().catch(() => {});
+  };
 
   return (
-    <header className="topbar">
+    <header className="topbar" onMouseDown={handleDragMouseDown}>
       <div className="topDragRegion" data-tauri-drag-region>
         <div className="brandLine">
           <img className="appLogo" src="/codex-tools.png" alt="Codex Tools logo" />

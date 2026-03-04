@@ -196,14 +196,15 @@
   grid-template-columns: 1fr auto;
   gap: 24px;
   align-items: start;
+  cursor: grab;
 }
 
 .topDragRegion {
   user-select: none;
-  cursor: grab;
+  cursor: inherit;
 }
 
-.topDragRegion:active {
+.topbar:active {
   cursor: grabbing;
 }
 
@@ -247,6 +248,7 @@
   gap: 8px;
   justify-content: flex-end;
   align-items: center;
+  cursor: default;
 }
 
 .smartSwitchButton {

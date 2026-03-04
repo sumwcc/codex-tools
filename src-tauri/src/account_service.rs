@@ -16,6 +16,9 @@ use crate::usage::fetch_usage_snapshot;
 use crate::utils::now_unix_seconds;
 use crate::utils::short_account;
 
+const DEACTIVATED_WORKSPACE_NOTICE: &str =
+    "该账号已被踢出 team 组织，请重新授权后再刷新。";
+
 pub(crate) async fn list_accounts_internal(
     app: &AppHandle,
     state: &AppState,
@@ -256,9 +259,10 @@ pub(crate) async fn refresh_all_usage_internal(
                     } else {
                         err
                     };
+                    let display_error = normalize_usage_error_message(&combined_error);
                     RefreshOutcome {
                         usage: None,
-                        usage_error: Some(combined_error),
+                        usage_error: Some(display_error),
                         updated_at,
                         auth_plan_type,
                         auth_email,
@@ -343,6 +347,15 @@ fn should_retry_with_token_refresh(
             normalized.contains("401")
                 || normalized.contains("unauthorized")
                 || normalized.contains("invalid_token")
+                || normalized.contains("deactivated_workspace")
         }
     }
+}
+
+fn normalize_usage_error_message(raw_error: &str) -> String {
+    let normalized = raw_error.to_ascii_lowercase();
+    if normalized.contains("deactivated_workspace") {
+        return DEACTIVATED_WORKSPACE_NOTICE.to_string();
+    }
+    raw_error.to_string()
 }
