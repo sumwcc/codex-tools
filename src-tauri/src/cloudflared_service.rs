@@ -18,6 +18,7 @@ use crate::models::NamedCloudflaredTunnelInput;
 use crate::models::StartCloudflaredTunnelInput;
 use crate::state::AppState;
 use crate::state::CloudflaredRuntimeHandle;
+use crate::utils::new_resolved_command;
 use crate::utils::now_unix_seconds;
 
 const CLOUDFLARE_API_BASE_URL: &str = "https://api.cloudflare.com/client/v4";
@@ -614,7 +615,7 @@ fn ensure_quick_tunnel_is_allowed() -> Result<(), String> {
 }
 
 fn run_install_command(cmd: &str, args: &[&str], prefix: &str) -> Result<(), String> {
-    let output = Command::new(cmd)
+    let output = new_resolved_command(cmd)
         .args(args)
         .output()
         .map_err(|e| format!("{prefix}: {e}"))?;
@@ -640,7 +641,7 @@ fn ensure_command_available(
     version_arg: &str,
     missing_message: &str,
 ) -> Result<(), String> {
-    let status = Command::new(command).arg(version_arg).status();
+    let status = new_resolved_command(command).arg(version_arg).status();
     match status {
         Ok(_) => Ok(()),
         Err(_) => Err(missing_message.to_string()),

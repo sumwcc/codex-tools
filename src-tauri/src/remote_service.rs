@@ -16,7 +16,10 @@ use crate::models::RemoteAuthMode;
 use crate::models::RemoteProxyStatus;
 use crate::models::RemoteServerConfig;
 use crate::store::account_store_path_from_data_dir;
+use crate::utils::find_command_path;
+use crate::utils::new_resolved_command;
 use crate::utils::now_unix_seconds;
+use crate::utils::prepend_path_entry;
 
 const REMOTE_BINARY_NAME: &str = "codex-tools-proxyd";
 const REMOTE_DEPLOY_PROGRESS_EVENT: &str = "remote-deploy-progress";
@@ -41,10 +44,19 @@ struct LocalRustToolchain {
 
 impl LocalRustToolchain {
     fn resolve() -> Self {
-        let cargo_bin = rustup_which("cargo").unwrap_or_else(|| PathBuf::from("cargo"));
-        let rustc_bin = rustup_which("rustc");
-        let bin_dir = absolute_parent(&cargo_bin)
-            .or_else(|| rustc_bin.as_deref().and_then(absolute_parent))
+        let cargo_bin = rustup_which("cargo")
+            .or_else(|| find_command_path("cargo"))
+            .unwrap_or_else(|| PathBuf::from("cargo"));
+        let rustc_bin = rustup_which("rustc").or_else(|| find_command_path("rustc"));
+        let bin_dir = cargo_bin
+            .parent()
+            .filter(|_| cargo_bin.is_absolute())
+            .or_else(|| {
+                rustc_bin
+                    .as_deref()
+                    .filter(|path| path.is_absolute())
+                    .and_then(Path::parent)
+            })
             .map(Path::to_path_buf);
 
         Self {
@@ -515,7 +527,7 @@ fn build_linux_binary_for_server(
                     manifest_path.display()
                 )),
             );
-            let mut command = Command::new("cross");
+            let mut command = new_resolved_command("cross");
             command
                 .current_dir(&manifest_dir)
                 .env("CARGO_TARGET_DIR", &target_dir)
@@ -709,11 +721,16 @@ fn ensure_ssh_tools_available_for(server: &RemoteServerConfig) -> Result<(), Str
 }
 
 fn ensure_command_available(command: &str, message: &str) -> Result<(), String> {
-    Command::new(command)
+    new_resolved_command(command)
         .arg("-V")
         .output()
         .map(|_| ())
-        .or_else(|_| Command::new(command).arg("--version").output().map(|_| ()))
+        .or_else(|_| {
+            new_resolved_command(command)
+                .arg("--version")
+                .output()
+                .map(|_| ())
+        })
         .map_err(|_| message.to_string())
 }
 
@@ -722,8 +739,11 @@ fn command_sshpass_available() -> bool {
 }
 
 fn command_exists(command: &str) -> bool {
-    Command::new(command).arg("--version").output().is_ok()
-        || Command::new(command).arg("-V").output().is_ok()
+    new_resolved_command(command)
+        .arg("--version")
+        .output()
+        .is_ok()
+        || new_resolved_command(command).arg("-V").output().is_ok()
 }
 
 fn cargo_subcommand_available(subcommand: &str, cargo_toolchain: &LocalRustToolchain) -> bool {
@@ -953,7 +973,7 @@ fn ensure_rust_target(target: &str, cargo_toolchain: &LocalRustToolchain) -> Res
         return Ok(());
     }
 
-    let mut command = Command::new("rustup");
+    let mut command = new_resolved_command("rustup");
     command.arg("target").arg("add");
     if let Some(toolchain) = &cargo_toolchain.rustup_toolchain {
         command.arg("--toolchain").arg(toolchain);
@@ -990,7 +1010,7 @@ fn run_local_command(command: &mut Command) -> Result<(), String> {
 }
 
 fn run_install_command(cmd: &str, args: &[&str], prefix: &str) -> Result<(), String> {
-    let output = Command::new(cmd)
+    let output = new_resolved_command(cmd)
         .args(args)
         .output()
         .map_err(|error| format!("{prefix}: {error}"))?;
@@ -1092,24 +1112,11 @@ fn is_key_command_output_line(line: &str) -> bool {
         || line.contains("No such file or directory")
 }
 
-fn absolute_parent(path: &Path) -> Option<&Path> {
-    if path.is_absolute() {
-        path.parent()
-    } else {
-        None
-    }
-}
-
-fn prepend_path_entry(path: &Path) -> Option<OsString> {
-    let mut paths = vec![path.to_path_buf()];
-    if let Some(existing) = env::var_os("PATH") {
-        paths.extend(env::split_paths(&existing));
-    }
-    env::join_paths(paths).ok()
-}
-
 fn rustup_which(tool: &str) -> Option<PathBuf> {
-    let output = Command::new("rustup").args(["which", tool]).output().ok()?;
+    let output = new_resolved_command("rustup")
+        .args(["which", tool])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1122,7 +1129,7 @@ fn rustup_which(tool: &str) -> Option<PathBuf> {
 }
 
 fn rustup_active_toolchain_name() -> Option<String> {
-    let output = Command::new("rustup")
+    let output = new_resolved_command("rustup")
         .args(["show", "active-toolchain"])
         .output()
         .ok()?;
@@ -1391,12 +1398,13 @@ impl PreparedAuth {
     }
 
     fn new_command(&self, program: &str) -> Command {
+        let program_path = find_command_path(program).unwrap_or_else(|| PathBuf::from(program));
         let mut command = if let Some(password) = self.password.as_deref() {
-            let mut command = Command::new("sshpass");
-            command.arg("-p").arg(password).arg(program);
+            let mut command = new_resolved_command("sshpass");
+            command.arg("-p").arg(password).arg(&program_path);
             command
         } else {
-            Command::new(program)
+            new_resolved_command(program)
         };
         command.env("SSH_ASKPASS_REQUIRE", "never");
         command.env_remove("SSH_ASKPASS");

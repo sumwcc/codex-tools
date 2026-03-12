@@ -523,6 +523,8 @@ pub fn run() {
         .on_menu_event(tray::handle_status_bar_menu_event)
         .on_window_event(handle_window_close_to_background)
         .setup(|app| {
+            utils::prepare_process_path();
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
