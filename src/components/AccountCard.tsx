@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { AccountSummary } from "../types/app";
 import {
@@ -11,7 +11,9 @@ import {
 type AccountCardProps = {
   accounts: AccountSummary[];
   switchingId: string | null;
+  renamingAccountId: string | null;
   pendingDeleteId: string | null;
+  onRename: (account: AccountSummary, label: string) => Promise<boolean>;
   onSwitch: (account: AccountSummary) => void;
   onDelete: (account: AccountSummary) => void;
 };
@@ -43,6 +45,15 @@ function LaunchIcon({ spinning }: { spinning: boolean }) {
   return (
     <svg className="iconGlyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="M7 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg className="iconGlyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4z" />
     </svg>
   );
 }
@@ -120,7 +131,9 @@ function pickDefaultAccount(accounts: AccountSummary[]): AccountSummary | null {
 export function AccountCard({
   accounts,
   switchingId,
+  renamingAccountId,
   pendingDeleteId,
+  onRename,
   onSwitch,
   onDelete,
 }: AccountCardProps) {
@@ -128,6 +141,8 @@ export function AccountCard({
   const [preferredSelectedId, setPreferredSelectedId] = useState<string | null>(
     () => pickDefaultAccount(accounts)?.id ?? null,
   );
+  const [isEditingAlias, setIsEditingAlias] = useState(false);
+  const [draftLabel, setDraftLabel] = useState("");
 
   const selectedAccount = useMemo(
     () =>
@@ -149,10 +164,16 @@ export function AccountCard({
   const normalizedPlan = selectedAccount.planType || usage?.planType;
   const tone = planTone(normalizedPlan);
   const isSwitching = switchingId === selectedAccount.id;
+  const isRenaming = renamingAccountId === selectedAccount.accountId;
   const isDeletePending = pendingDeleteId === selectedAccount.id;
   const launchLabel = isSwitching ? copy.accountCard.launching : copy.accountCard.launch;
   const fiveHourReset = formatResetValue(fiveHour?.resetAt, locale);
   const oneWeekReset = formatResetValue(oneWeek?.resetAt, locale);
+  const normalizedDraftLabel = draftLabel.trim();
+  const canSaveAlias =
+    normalizedDraftLabel.length > 0 &&
+    normalizedDraftLabel !== selectedAccount.label.trim() &&
+    !isRenaming;
 
   const handleLaunch = () => {
     if (isSwitching) return;
@@ -161,6 +182,31 @@ export function AccountCard({
 
   const handleSelectAccount = (account: AccountSummary) => {
     setPreferredSelectedId(account.id);
+  };
+
+  const handleStartAliasEdit = () => {
+    setDraftLabel(selectedAccount.label);
+    setIsEditingAlias(true);
+  };
+
+  const handleCancelAliasEdit = () => {
+    if (isRenaming) {
+      return;
+    }
+    setDraftLabel(selectedAccount.label);
+    setIsEditingAlias(false);
+  };
+
+  const handleAliasSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canSaveAlias) {
+      return;
+    }
+
+    const updated = await onRename(selectedAccount, normalizedDraftLabel);
+    if (updated) {
+      setIsEditingAlias(false);
+    }
   };
 
   return (
@@ -193,28 +239,86 @@ export function AccountCard({
                       : variantPlan
                   }
                 >
-                  {account.isCurrent && <span className="cardStatusDot" aria-hidden="true" />}
                   {variantPlan}
+                  {account.isCurrent && (
+                    <span className="planCurrentGlass" aria-hidden="true">
+                      {copy.accountCard.currentStamp}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
-          <h3 className={selectedAccount.isCurrent ? "nameCurrent" : ""}>{selectedAccount.label}</h3>
+          {isEditingAlias ? (
+            <form className="cardAliasEditor" onSubmit={handleAliasSubmit}>
+              <label className="visuallyHidden" htmlFor={`account-alias-${selectedAccount.id}`}>
+                {copy.accountCard.aliasInputLabel}
+              </label>
+              <input
+                id={`account-alias-${selectedAccount.id}`}
+                value={draftLabel}
+                maxLength={60}
+                autoFocus
+                disabled={isRenaming}
+                onChange={(event) => setDraftLabel(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    handleCancelAliasEdit();
+                  }
+                }}
+              />
+              <div className="cardAliasActions">
+                <button
+                  type="submit"
+                  className="primary cardAliasAction"
+                  disabled={!canSaveAlias}
+                >
+                  {copy.accountCard.saveAlias}
+                </button>
+                <button
+                  type="button"
+                  className="ghost cardAliasAction"
+                  onClick={handleCancelAliasEdit}
+                  disabled={isRenaming}
+                >
+                  {copy.accountCard.cancelAlias}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <h3 className={selectedAccount.isCurrent ? "nameCurrent" : ""}>
+              {selectedAccount.label}
+            </h3>
+          )}
         </div>
-        <button
-          className={`cardDeleteIcon ${isDeletePending ? "isPending" : ""}`}
-          onClick={() => onDelete(selectedAccount)}
-          aria-label={isDeletePending ? copy.accountCard.deleteConfirm : copy.accountCard.delete}
-          title={isDeletePending ? copy.accountCard.deleteConfirm : copy.accountCard.delete}
-        >
-          <svg className="iconGlyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M3 6h18" />
-            <path d="M8 6V4h8v2" />
-            <path d="M19 6l-1 14H6L5 6" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-          </svg>
-        </button>
+        <div className="cardActions">
+          <button
+            type="button"
+            className="cardEditIcon"
+            onClick={handleStartAliasEdit}
+            disabled={isEditingAlias || isRenaming}
+            aria-label={copy.accountCard.editAlias}
+            title={copy.accountCard.editAlias}
+          >
+            <EditIcon />
+          </button>
+          <button
+            type="button"
+            className={`cardDeleteIcon ${isDeletePending ? "isPending" : ""}`}
+            onClick={() => onDelete(selectedAccount)}
+            aria-label={isDeletePending ? copy.accountCard.deleteConfirm : copy.accountCard.delete}
+            title={isDeletePending ? copy.accountCard.deleteConfirm : copy.accountCard.delete}
+          >
+            <svg className="iconGlyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="M19 6l-1 14H6L5 6" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div className="usageGrid">

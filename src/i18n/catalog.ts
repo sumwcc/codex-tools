@@ -92,8 +92,13 @@ export type MessageCatalog = {
   };
   accountCard: {
     currentStamp: string;
+    currentBadge: string;
     launch: string;
     launching: string;
+    editAlias: string;
+    saveAlias: string;
+    cancelAlias: string;
+    aliasInputLabel: string;
     delete: string;
     deleteConfirm: string;
     used: string;
@@ -359,6 +364,8 @@ export type MessageCatalog = {
     addAccountAutoImportFailed: (error: string) => string;
     addAccountTimeout: string;
     startLoginFlowFailed: (error: string) => string;
+    accountAliasUpdated: (label: string) => string;
+    accountAliasUpdateFailed: (error: string) => string;
     accountsExported: string;
     accountsExportFailed: (error: string) => string;
     deleteConfirm: (label: string) => string;
@@ -484,6 +491,9 @@ function compileLocale(raw: RawMessageCatalog): MessageCatalog {
       addAccountAutoImportFailed: (error) =>
         fillTemplate(raw.notices.addAccountAutoImportFailed, { error }),
       startLoginFlowFailed: (error) => fillTemplate(raw.notices.startLoginFlowFailed, { error }),
+      accountAliasUpdated: (label) => fillTemplate(raw.notices.accountAliasUpdated, { label }),
+      accountAliasUpdateFailed: (error) =>
+        fillTemplate(raw.notices.accountAliasUpdateFailed, { error }),
       accountsExportFailed: (error) =>
         fillTemplate(raw.notices.accountsExportFailed, { error }),
       deleteConfirm: (label) => fillTemplate(raw.notices.deleteConfirm, { label }),

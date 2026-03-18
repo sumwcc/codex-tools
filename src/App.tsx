@@ -29,6 +29,7 @@ function App() {
     importingUpload,
     exportingAccounts,
     switchingId,
+    renamingAccountId,
     pendingDeleteId,
     checkingUpdate,
     installingUpdate,
@@ -84,6 +85,7 @@ function App() {
     onInstallCloudflared,
     onStartCloudflared,
     onStopCloudflared,
+    onRenameAccountLabel,
     onDelete,
     onSwitch,
     onSmartSwitch,
@@ -168,7 +170,9 @@ function App() {
                 accounts={accounts}
                 loading={loading}
                 switchingId={switchingId}
+                renamingAccountId={renamingAccountId}
                 pendingDeleteId={pendingDeleteId}
+                onRename={(account, label) => onRenameAccountLabel(account, label)}
                 onSwitch={(account) => void onSwitch(account)}
                 onDelete={(account) => void onDelete(account)}
               />

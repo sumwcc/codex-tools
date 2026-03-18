@@ -41,7 +41,9 @@ type AccountsGridProps = {
   accounts: AccountSummary[];
   loading: boolean;
   switchingId: string | null;
+  renamingAccountId: string | null;
   pendingDeleteId: string | null;
+  onRename: (account: AccountSummary, label: string) => Promise<boolean>;
   onSwitch: (account: AccountSummary) => void;
   onDelete: (account: AccountSummary) => void;
 };
@@ -50,7 +52,9 @@ export function AccountsGrid({
   accounts,
   loading,
   switchingId,
+  renamingAccountId,
   pendingDeleteId,
+  onRename,
   onSwitch,
   onDelete,
 }: AccountsGridProps) {
@@ -87,7 +91,9 @@ export function AccountsGrid({
           key={group.id}
           accounts={group.variants}
           switchingId={switchingId}
+          renamingAccountId={renamingAccountId}
           pendingDeleteId={pendingDeleteId}
+          onRename={onRename}
           onSwitch={onSwitch}
           onDelete={onDelete}
         />

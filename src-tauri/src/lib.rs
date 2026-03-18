@@ -101,6 +101,31 @@ async fn delete_account(
 }
 
 #[tauri::command]
+async fn update_account_label(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account_id: String,
+    label: String,
+) -> Result<String, String> {
+    let resolved_label =
+        account_service::update_account_label_internal(&app, state.inner(), &account_id, label)
+            .await?;
+
+    {
+        let api_proxy = state.api_proxy.lock().await;
+        if let Some(handle) = api_proxy.as_ref() {
+            let mut snapshot = handle.shared.lock().await;
+            if snapshot.active_account_id.as_deref() == Some(account_id.as_str()) {
+                snapshot.active_account_label = Some(resolved_label.clone());
+            }
+        }
+    }
+
+    let _ = tray::refresh_macos_tray_snapshot(&app);
+    Ok(resolved_label)
+}
+
+#[tauri::command]
 async fn refresh_all_usage(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -586,6 +611,7 @@ pub fn run() {
             import_auth_json_accounts,
             export_accounts_zip,
             delete_account,
+            update_account_label,
             refresh_all_usage,
             get_app_settings,
             update_app_settings,

@@ -164,6 +164,7 @@ export function useCodexController() {
   const [startingCloudflared, setStartingCloudflared] = useState(false);
   const [stoppingCloudflared, setStoppingCloudflared] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [renamingAccountId, setRenamingAccountId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
@@ -1256,6 +1257,63 @@ export function useCodexController() {
     stoppingCloudflared,
   ]);
 
+  const onRenameAccountLabel = useCallback(
+    async (account: AccountSummary, label: string): Promise<boolean> => {
+      const normalizedLabel = label.trim();
+      if (!normalizedLabel) {
+        return false;
+      }
+      if (normalizedLabel === account.label.trim()) {
+        return true;
+      }
+      if (renamingAccountId === account.accountId) {
+        return false;
+      }
+
+      setRenamingAccountId(account.accountId);
+      try {
+        const resolvedLabel = await invoke<string>("update_account_label", {
+          accountId: account.accountId,
+          label: normalizedLabel,
+        });
+        setAccounts((prev) =>
+          prev.map((item) =>
+            item.accountId === account.accountId
+              ? {
+                  ...item,
+                  label: resolvedLabel,
+                }
+              : item,
+          ),
+        );
+        setApiProxyStatus((prev) =>
+          prev.activeAccountId === account.accountId
+            ? {
+                ...prev,
+                activeAccountLabel: resolvedLabel,
+              }
+            : prev,
+        );
+        setNotice({
+          type: "ok",
+          message: copy.notices.accountAliasUpdated(resolvedLabel),
+        });
+        return true;
+      } catch (error) {
+        setNotice({
+          type: "error",
+          message: copy.notices.accountAliasUpdateFailed(localizeError(String(error))),
+        });
+        return false;
+      } finally {
+        setRenamingAccountId((current) =>
+          current === account.accountId ? null : current,
+        );
+      }
+    },
+    [copy.notices, localizeError, renamingAccountId],
+  );
+
   const onDelete = useCallback(async (account: AccountSummary) => {
     if (pendingDeleteId !== account.id) {
       setPendingDeleteId(account.id);
@@ -1454,6 +1512,7 @@ export function useCodexController() {
     startingCloudflared,
     stoppingCloudflared,
     switchingId,
+    renamingAccountId,
     pendingDeleteId,
     checkingUpdate,
     installingUpdate,
@@ -1491,6 +1550,7 @@ export function useCodexController() {
     onInstallCloudflared,
     onStartCloudflared,
     onStopCloudflared,
+    onRenameAccountLabel,
     onDelete,
     onSwitch,
     onSmartSwitch,

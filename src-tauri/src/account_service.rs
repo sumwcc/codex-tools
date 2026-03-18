@@ -172,7 +172,7 @@ pub(crate) async fn delete_account_internal(
     state: &AppState,
     id: &str,
 ) -> Result<(), String> {
-    let mut _guard = state.store_lock.lock().await;
+    let _guard = state.store_lock.lock().await;
     let mut store = load_store(app)?;
     let original_len = store.accounts.len();
     store.accounts.retain(|account| account.id != id);
@@ -183,6 +183,38 @@ pub(crate) async fn delete_account_internal(
 
     save_store(app, &store)?;
     Ok(())
+}
+
+pub(crate) async fn update_account_label_internal(
+    app: &AppHandle,
+    state: &AppState,
+    account_id: &str,
+    label: String,
+) -> Result<String, String> {
+    let resolved_label =
+        normalize_custom_label(Some(label)).ok_or_else(|| "账号别名不能为空".to_string())?;
+    let now = now_unix_seconds();
+
+    let _guard = state.store_lock.lock().await;
+    let mut store = load_store(app)?;
+    let mut updated = false;
+
+    for account in store
+        .accounts
+        .iter_mut()
+        .filter(|account| account.account_id == account_id)
+    {
+        account.label = resolved_label.clone();
+        account.updated_at = now;
+        updated = true;
+    }
+
+    if !updated {
+        return Err("未找到要设置别名的账号".to_string());
+    }
+
+    save_store(app, &store)?;
+    Ok(resolved_label)
 }
 
 /// 拉取并刷新所有账号用量，返回可直接用于前端/状态栏显示的摘要。
