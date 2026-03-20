@@ -517,15 +517,22 @@ fn open_external_url(url: String) -> Result<(), String> {
     {
         // Avoid `cmd /C start` here. OAuth URLs contain `&`, and cmd treats them
         // as command separators unless they are shell-escaped very carefully.
-        if Command::new("explorer.exe").arg(&url).spawn().is_ok() {
-            return Ok(());
-        }
-
+        // Prefer the Windows URL protocol handler so the link goes to the
+        // user's default browser instead of opening a File Explorer window.
         Command::new("rundll32.exe")
             .args(["url.dll,FileProtocolHandler", &url])
             .spawn()
-            .map_err(|e| format!("打开外部链接失败: {e}"))?;
-        return Ok(());
+            .or_else(|primary_error| {
+                Command::new("explorer.exe")
+                    .arg(&url)
+                    .spawn()
+                    .map_err(|fallback_error| {
+                        format!(
+                            "打开外部链接失败: rundll32={primary_error}; explorer={fallback_error}"
+                        )
+                    })
+            })?;
+        Ok(())
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
