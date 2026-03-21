@@ -3,12 +3,16 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::Map;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use sha2::Digest;
-use sha2::Sha256;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::models::ExtractedAuth;
 use crate::models::PreparedOauthLogin;
@@ -69,12 +73,10 @@ pub(crate) fn write_active_codex_auth(auth_json: &Value) -> Result<(), String> {
     fs::create_dir_all(parent)
         .map_err(|e| format!("创建 auth 目录失败 {}: {e}", parent.display()))?;
 
-    let serialized = serde_json::to_string_pretty(auth_json)
+    let normalized = normalize_auth_json_for_codex(auth_json.clone());
+    let serialized = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("序列化 auth.json 失败: {e}"))?;
-    fs::write(&path, serialized)
-        .map_err(|e| format!("写入 auth.json 失败 {}: {e}", path.display()))?;
-    set_private_permissions(&path);
-    Ok(())
+    write_auth_file_atomically(&path, serialized.as_bytes())
 }
 
 pub(crate) fn prepare_oauth_login() -> Result<(PendingOauthLogin, PreparedOauthLogin), String> {
@@ -164,7 +166,7 @@ pub(crate) fn normalize_imported_auth_json(auth_json: Value) -> Value {
     };
 
     if root.get("tokens").and_then(Value::as_object).is_some() {
-        return auth_json;
+        return normalize_auth_json_for_codex(auth_json);
     }
 
     let Some(access_token) = root.get("access_token").and_then(Value::as_str) else {
@@ -210,7 +212,7 @@ pub(crate) fn normalize_imported_auth_json(auth_json: Value) -> Value {
         normalized.insert("last_refresh".to_string(), last_refresh.clone());
     }
 
-    Value::Object(normalized)
+    normalize_auth_json_for_codex(Value::Object(normalized))
 }
 
 /// 解析当前 auth.json，提取账号标识和用量接口所需 token。
@@ -476,7 +478,8 @@ pub(crate) async fn refresh_chatgpt_auth_tokens(auth_json: &Value) -> Result<Val
         tokens.insert("refresh_token".to_string(), Value::String(refresh_token));
     }
 
-    Ok(updated)
+    update_last_refresh(&mut updated)?;
+    Ok(normalize_auth_json_for_codex(updated))
 }
 
 fn parse_oauth_callback_url(callback_url: &str) -> Result<reqwest::Url, String> {
@@ -534,11 +537,7 @@ fn build_auth_json_from_oauth_tokens(token_response: OAuthTokenResponse) -> Resu
         .and_then(Value::as_str)
         .ok_or_else(|| "无法从 OAuth 登录结果识别 chatgpt_account_id".to_string())?;
 
-    let last_refresh = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("读取系统时间失败: {error}"))?
-        .as_secs()
-        .to_string();
+    let last_refresh = current_rfc3339_timestamp()?;
 
     Ok(serde_json::json!({
         "OPENAI_API_KEY": Value::Null,
@@ -570,6 +569,142 @@ fn auth_token_object(auth_json: &Value) -> Option<&Map<String, Value>> {
                 None
             }
         })
+}
+
+fn normalize_auth_json_for_codex(auth_json: Value) -> Value {
+    let Some(root) = auth_json.as_object() else {
+        return auth_json;
+    };
+
+    let mut normalized = root.clone();
+
+    match normalized
+        .get("last_refresh")
+        .and_then(normalize_last_refresh_value)
+    {
+        Some(value) => {
+            normalized.insert("last_refresh".to_string(), Value::String(value));
+        }
+        None => {
+            normalized.remove("last_refresh");
+        }
+    }
+
+    Value::Object(normalized)
+}
+
+fn normalize_last_refresh_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if OffsetDateTime::parse(trimmed, &Rfc3339).is_ok() {
+                return Some(trimmed.to_string());
+            }
+            trimmed
+                .parse::<i64>()
+                .ok()
+                .and_then(unix_timestamp_to_rfc3339)
+        }
+        Value::Number(number) => number.as_i64().and_then(unix_timestamp_to_rfc3339),
+        _ => None,
+    }
+}
+
+fn unix_timestamp_to_rfc3339(timestamp: i64) -> Option<String> {
+    let datetime = if timestamp.abs() >= 1_000_000_000_000 {
+        OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp) * 1_000_000).ok()?
+    } else {
+        OffsetDateTime::from_unix_timestamp(timestamp).ok()?
+    };
+    datetime.format(&Rfc3339).ok()
+}
+
+fn current_rfc3339_timestamp() -> Result<String, String> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| format!("生成 last_refresh 失败: {error}"))
+}
+
+fn update_last_refresh(auth_json: &mut Value) -> Result<(), String> {
+    let timestamp = current_rfc3339_timestamp()?;
+    let root = auth_json
+        .as_object_mut()
+        .ok_or_else(|| "auth.json 结构异常（根节点不是对象）".to_string())?;
+    root.insert("last_refresh".to_string(), Value::String(timestamp));
+    Ok(())
+}
+
+fn write_auth_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("无法解析 auth 目录 {}", path.display()))?;
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("auth.json"),
+        uuid::Uuid::new_v4()
+    ));
+
+    let write_result = (|| -> Result<(), String> {
+        let mut temp_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+            .map_err(|e| format!("创建临时 auth.json 失败 {}: {e}", temp_path.display()))?;
+        temp_file
+            .write_all(contents)
+            .map_err(|e| format!("写入临时 auth.json 失败 {}: {e}", temp_path.display()))?;
+        temp_file
+            .sync_all()
+            .map_err(|e| format!("刷新临时 auth.json 失败 {}: {e}", temp_path.display()))?;
+        drop(temp_file);
+        set_private_permissions(&temp_path);
+
+        #[cfg(target_family = "unix")]
+        {
+            fs::rename(&temp_path, path).map_err(|e| {
+                format!(
+                    "替换 auth.json 失败 {} -> {}: {e}",
+                    temp_path.display(),
+                    path.display()
+                )
+            })?;
+
+            let parent_dir = fs::File::open(parent)
+                .map_err(|e| format!("打开 auth 目录失败 {}: {e}", parent.display()))?;
+            parent_dir
+                .sync_all()
+                .map_err(|e| format!("刷新 auth 目录失败 {}: {e}", parent.display()))?;
+        }
+
+        #[cfg(not(target_family = "unix"))]
+        {
+            if path.exists() {
+                fs::remove_file(path)
+                    .map_err(|e| format!("移除旧 auth.json 失败 {}: {e}", path.display()))?;
+            }
+            fs::rename(&temp_path, path).map_err(|e| {
+                format!(
+                    "替换 auth.json 失败 {} -> {}: {e}",
+                    temp_path.display(),
+                    path.display()
+                )
+            })?;
+        }
+
+        set_private_permissions(path);
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    write_result
 }
 
 fn decode_jwt_payload(token: &str) -> Result<Value, String> {
@@ -628,5 +763,65 @@ fn extract_client_id_from_claims(claims: &Value) -> Option<String> {
             })
         }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_auth_json_for_codex;
+    use serde_json::json;
+
+    #[test]
+    fn normalizes_legacy_unix_last_refresh_string() {
+        let normalized = normalize_auth_json_for_codex(json!({
+            "auth_mode": "chatgpt",
+            "last_refresh": "1711111111",
+            "tokens": {
+                "access_token": "a",
+                "refresh_token": "b",
+                "id_token": "c"
+            }
+        }));
+
+        let last_refresh = normalized
+            .get("last_refresh")
+            .and_then(serde_json::Value::as_str)
+            .expect("last_refresh should be preserved");
+        assert!(last_refresh.contains('T'));
+        assert!(last_refresh.ends_with('Z'));
+        assert_ne!(last_refresh, "1711111111");
+    }
+
+    #[test]
+    fn removes_unparseable_last_refresh() {
+        let normalized = normalize_auth_json_for_codex(json!({
+            "auth_mode": "chatgpt",
+            "last_refresh": "not-a-timestamp",
+            "tokens": {
+                "access_token": "a",
+                "refresh_token": "b",
+                "id_token": "c"
+            }
+        }));
+
+        assert!(normalized.get("last_refresh").is_none());
+    }
+
+    #[test]
+    fn keeps_valid_rfc3339_last_refresh() {
+        let normalized = normalize_auth_json_for_codex(json!({
+            "auth_mode": "chatgpt",
+            "last_refresh": "2026-03-16T03:20:39.082325Z",
+            "tokens": {
+                "access_token": "a",
+                "refresh_token": "b",
+                "id_token": "c"
+            }
+        }));
+
+        assert_eq!(
+            normalized.get("last_refresh"),
+            Some(&json!("2026-03-16T03:20:39.082325Z"))
+        );
     }
 }
