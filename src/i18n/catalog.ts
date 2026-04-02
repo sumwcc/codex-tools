@@ -368,6 +368,7 @@ export type MessageCatalog = {
     updateSettingsFailed: (error: string) => string;
     usageRefreshed: string;
     refreshFailed: (error: string) => string;
+    reloginRequired: (label: string) => string;
     preparingUpdateDownload: string;
     alreadyLatest: string;
     updateDownloadStarted: string;
@@ -498,6 +499,7 @@ function compileLocale(raw: RawMessageCatalog): MessageCatalog {
       ...raw.notices,
       updateSettingsFailed: (error) => fillTemplate(raw.notices.updateSettingsFailed, { error }),
       refreshFailed: (error) => fillTemplate(raw.notices.refreshFailed, { error }),
+      reloginRequired: (label) => fillTemplate(raw.notices.reloginRequired, { label }),
       updateDownloadingPercent: (percent) =>
         fillTemplate(raw.notices.updateDownloadingPercent, { percent }),
       updateInstallFailed: (error) => fillTemplate(raw.notices.updateInstallFailed, { error }),

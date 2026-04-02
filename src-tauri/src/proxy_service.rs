@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
 use std::io::Write;
@@ -36,10 +37,8 @@ use tauri::AppHandle;
 #[cfg(feature = "desktop")]
 use tauri::Manager;
 
-use crate::auth::current_auth_variant_key;
 use crate::auth::extract_auth;
-use crate::auth::refresh_chatgpt_auth_tokens;
-use crate::auth::write_active_codex_auth;
+use crate::auth::refresh_chatgpt_auth_tokens_serialized;
 use crate::models::ApiProxyStatus;
 use crate::models::StoredAccount;
 use crate::models::UsageSnapshot;
@@ -51,6 +50,7 @@ use crate::state::AppState;
 use crate::store::account_store_path_from_data_dir;
 use crate::store::load_store_from_path;
 use crate::store::save_store_to_path;
+use crate::store::update_account_group_refresh_state_in_path;
 use crate::usage::resolve_chatgpt_base_origin;
 use crate::utils::now_unix_seconds;
 use crate::utils::set_private_permissions;
@@ -87,6 +87,7 @@ const RESPONSE_MODEL_NORMALIZATIONS: &[(&str, &str)] =
 pub(crate) struct ProxyStorageContext {
     pub(crate) data_dir: PathBuf,
     pub(crate) store_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) auth_refresh_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) sync_active_auth_on_refresh: bool,
 }
 
@@ -101,6 +102,9 @@ struct ProxyCandidate {
     variant_key: String,
     plan_type: Option<String>,
     usage: Option<UsageSnapshot>,
+    auth_refresh_blocked: bool,
+    auth_refresh_error: Option<String>,
+    updated_at: i64,
 }
 
 #[derive(Clone)]
@@ -170,11 +174,13 @@ impl Default for ChatStreamState {
 pub(crate) fn new_proxy_storage_context(
     data_dir: PathBuf,
     store_lock: Arc<tokio::sync::Mutex<()>>,
+    auth_refresh_lock: Arc<tokio::sync::Mutex<()>>,
     sync_active_auth_on_refresh: bool,
 ) -> ProxyStorageContext {
     ProxyStorageContext {
         data_dir,
         store_lock,
+        auth_refresh_lock,
         sync_active_auth_on_refresh,
     }
 }
@@ -187,6 +193,7 @@ fn app_proxy_storage_context(
     Ok(new_proxy_storage_context(
         app_data_dir(app)?,
         state.store_lock.clone(),
+        state.auth_refresh_lock.clone(),
         true,
     ))
 }
@@ -1171,6 +1178,17 @@ async fn send_codex_request_over_candidates(
             };
 
             if !did_refresh && should_retry_with_token_refresh(status, &upstream_body) {
+                if candidate.auth_refresh_blocked {
+                    attempt_errors.push(format!(
+                        "{}: {}",
+                        candidate.label,
+                        candidate
+                            .auth_refresh_error
+                            .clone()
+                            .unwrap_or_else(|| "授权过期，请重新登录授权。".to_string())
+                    ));
+                    break;
+                }
                 match refresh_proxy_candidate_auth(&context.storage, &candidate).await {
                     Ok(refreshed_candidate) => {
                         candidate = refreshed_candidate;
@@ -1278,11 +1296,21 @@ async fn load_proxy_candidates(
     let _guard = storage.store_lock.lock().await;
     let store = load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?;
 
-    let mut candidates = store
+    let mut deduped: HashMap<String, ProxyCandidate> = HashMap::new();
+    for candidate in store
         .accounts
         .into_iter()
         .filter_map(account_to_proxy_candidate)
-        .collect::<Vec<_>>();
+    {
+        match deduped.get(&candidate.account_key) {
+            Some(existing) if !should_replace_proxy_candidate(existing, &candidate) => {}
+            _ => {
+                deduped.insert(candidate.account_key.clone(), candidate);
+            }
+        }
+    }
+
+    let mut candidates = deduped.into_values().collect::<Vec<_>>();
     candidates.sort_by(compare_proxy_candidates);
     Ok(candidates)
 }
@@ -1306,10 +1334,25 @@ fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> 
             .or(account.plan_type)
             .or(extracted.plan_type),
         usage: account.usage,
+        auth_refresh_blocked: account.auth_refresh_blocked,
+        auth_refresh_error: account.auth_refresh_error,
+        updated_at: account.updated_at,
     })
 }
 
+fn should_replace_proxy_candidate(existing: &ProxyCandidate, candidate: &ProxyCandidate) -> bool {
+    if candidate.auth_refresh_blocked != existing.auth_refresh_blocked {
+        return !candidate.auth_refresh_blocked;
+    }
+    candidate.updated_at > existing.updated_at
+}
+
 fn compare_proxy_candidates(left: &ProxyCandidate, right: &ProxyCandidate) -> Ordering {
+    match right.auth_refresh_blocked.cmp(&left.auth_refresh_blocked) {
+        Ordering::Equal => {}
+        ordering => return ordering,
+    }
+
     match is_free_plan(&right.plan_type).cmp(&is_free_plan(&left.plan_type)) {
         Ordering::Equal => {}
         ordering => return ordering,
@@ -1366,8 +1409,37 @@ async fn refresh_proxy_candidate_auth(
     storage: &ProxyStorageContext,
     candidate: &ProxyCandidate,
 ) -> Result<ProxyCandidate, String> {
-    let refreshed_auth_json = refresh_chatgpt_auth_tokens(&candidate.auth_json).await?;
-    persist_refreshed_candidate_auth(storage, &candidate.id, &refreshed_auth_json).await?;
+    let refreshed_auth_json = match refresh_chatgpt_auth_tokens_serialized(
+        &candidate.auth_json,
+        &storage.auth_refresh_lock,
+    )
+    .await
+    {
+        Ok(refreshed) => refreshed,
+        Err(error) => {
+            if should_suspend_proxy_refresh(&error) {
+                let normalized = normalize_proxy_refresh_error(&error);
+                persist_candidate_refresh_state(
+                    storage,
+                    &candidate.account_key,
+                    None,
+                    true,
+                    Some(normalized.as_str()),
+                )
+                .await?;
+                return Err(normalized);
+            }
+            return Err(error);
+        }
+    };
+    persist_candidate_refresh_state(
+        storage,
+        &candidate.account_key,
+        Some(&refreshed_auth_json),
+        false,
+        None,
+    )
+    .await?;
 
     let extracted = extract_auth(&refreshed_auth_json)
         .map_err(|error| format!("刷新后解析账号登录态失败: {error}"))?;
@@ -1382,38 +1454,62 @@ async fn refresh_proxy_candidate_auth(
         variant_key: candidate.variant_key.clone(),
         plan_type: candidate.plan_type.clone().or(extracted.plan_type),
         usage: candidate.usage.clone(),
+        auth_refresh_blocked: false,
+        auth_refresh_error: None,
+        updated_at: now_unix_seconds(),
     })
 }
 
-async fn persist_refreshed_candidate_auth(
+async fn persist_candidate_refresh_state(
     storage: &ProxyStorageContext,
-    id: &str,
-    refreshed_auth_json: &Value,
+    account_key: &str,
+    auth_json: Option<&Value>,
+    auth_refresh_blocked: bool,
+    auth_refresh_error: Option<&str>,
 ) -> Result<(), String> {
     let _guard = storage.store_lock.lock().await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
-    let mut store = load_store_from_path(&store_path)?;
-
-    if let Some(account) = store.accounts.iter_mut().find(|account| account.id == id) {
-        account.auth_json = refreshed_auth_json.clone();
-        account.updated_at = now_unix_seconds();
-    }
-
-    save_store_to_path(&store_path, &store)?;
-
-    if storage.sync_active_auth_on_refresh
-        && current_auth_variant_key().as_deref()
-            == store
-                .accounts
-                .iter()
-                .find(|account| account.id == id)
-                .map(|account| account.variant_key())
-                .as_deref()
-    {
-        write_active_codex_auth(refreshed_auth_json)?;
-    }
-
+    update_account_group_refresh_state_in_path(
+        &store_path,
+        account_key,
+        auth_json,
+        auth_refresh_blocked,
+        auth_refresh_error,
+        now_unix_seconds(),
+        storage.sync_active_auth_on_refresh,
+    )?;
     Ok(())
+}
+
+fn should_suspend_proxy_refresh(raw_error: &str) -> bool {
+    let normalized = raw_error.to_ascii_lowercase();
+    normalized.contains("refresh_token_reused")
+        || normalized.contains("provided authentication token is expired")
+        || normalized
+            .contains("your refresh token has already been used to generate a new access token")
+        || normalized.contains("please try signing in again")
+        || normalized.contains("token is expired")
+        || normalized.contains("account has been deactivated")
+        || normalized.contains("deactivated_user")
+}
+
+fn normalize_proxy_refresh_error(raw_error: &str) -> String {
+    let normalized = raw_error.to_ascii_lowercase();
+    if normalized.contains("account has been deactivated")
+        || normalized.contains("deactivated_user")
+    {
+        return "账号被封禁，请检查邮箱".to_string();
+    }
+    if normalized.contains("refresh_token_reused")
+        || normalized.contains("provided authentication token is expired")
+        || normalized
+            .contains("your refresh token has already been used to generate a new access token")
+        || normalized.contains("please try signing in again")
+        || normalized.contains("token is expired")
+    {
+        return "授权过期，请重新登录授权。".to_string();
+    }
+    raw_error.to_string()
 }
 
 fn should_retry_with_token_refresh(status: StatusCode, body: &Bytes) -> bool {

@@ -51,6 +51,10 @@ pub(crate) struct StoredAccount {
     pub(crate) updated_at: i64,
     pub(crate) usage: Option<UsageSnapshot>,
     pub(crate) usage_error: Option<String>,
+    #[serde(default)]
+    pub(crate) auth_refresh_blocked: bool,
+    #[serde(default)]
+    pub(crate) auth_refresh_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +70,8 @@ pub(crate) struct AccountSummary {
     pub(crate) updated_at: i64,
     pub(crate) usage: Option<UsageSnapshot>,
     pub(crate) usage_error: Option<String>,
+    pub(crate) auth_refresh_blocked: bool,
+    pub(crate) auth_refresh_error: Option<String>,
     pub(crate) is_current: bool,
 }
 
@@ -386,7 +392,11 @@ impl StoredAccount {
                     .ok()
                     .and_then(|auth| auth.plan_type)
             })
-            .or_else(|| self.usage.as_ref().and_then(|usage| usage.plan_type.clone()))
+            .or_else(|| {
+                self.usage
+                    .as_ref()
+                    .and_then(|usage| usage.plan_type.clone())
+            })
     }
 
     pub(crate) fn variant_key(&self) -> String {
@@ -422,6 +432,8 @@ impl StoredAccount {
             updated_at: self.updated_at,
             usage: self.usage.clone(),
             usage_error: self.usage_error.clone(),
+            auth_refresh_blocked: self.auth_refresh_blocked,
+            auth_refresh_error: self.auth_refresh_error.clone(),
             is_current,
         }
     }
@@ -490,6 +502,12 @@ fn merge_duplicate_account_variant(left: StoredAccount, right: StoredAccount) ->
     if preferred.usage_error.is_none() {
         preferred.usage_error = alternate.usage_error.clone();
     }
+    if !preferred.auth_refresh_blocked && alternate.auth_refresh_blocked {
+        preferred.auth_refresh_blocked = true;
+    }
+    if preferred.auth_refresh_error.is_none() {
+        preferred.auth_refresh_error = alternate.auth_refresh_error.clone();
+    }
     if preferred.auth_json.is_null() && !alternate.auth_json.is_null() {
         preferred.auth_json = alternate.auth_json.clone();
     }
@@ -497,9 +515,10 @@ fn merge_duplicate_account_variant(left: StoredAccount, right: StoredAccount) ->
     preferred
 }
 
-fn duplicate_account_merge_score(account: &StoredAccount) -> (u8, u8, u8, i64, i64) {
+fn duplicate_account_merge_score(account: &StoredAccount) -> (u8, u8, u8, u8, i64, i64) {
     (
         u8::from(account.usage.is_some() && account.usage_error.is_none()),
+        u8::from(!account.auth_refresh_blocked),
         u8::from(account.resolved_plan_type().is_some()),
         u8::from(
             account
@@ -516,12 +535,12 @@ fn duplicate_account_merge_score(account: &StoredAccount) -> (u8, u8, u8, i64, i
 
 #[cfg(test)]
 mod tests {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
     use super::dedupe_account_variants;
     use super::StoredAccount;
     use super::UsageSnapshot;
     use super::UsageWindow;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
     use serde_json::json;
 
     fn usage_snapshot(plan_type: &str) -> UsageSnapshot {
@@ -569,6 +588,8 @@ mod tests {
             updated_at,
             usage: usage_plan_type.map(usage_snapshot),
             usage_error: None,
+            auth_refresh_blocked: false,
+            auth_refresh_error: None,
         }
     }
 
@@ -631,6 +652,8 @@ mod tests {
             updated_at: 1,
             usage: Some(usage_snapshot("plus")),
             usage_error: None,
+            auth_refresh_blocked: false,
+            auth_refresh_error: None,
         };
 
         assert_eq!(account.resolved_plan_type().as_deref(), Some("team"));
@@ -657,6 +680,8 @@ mod tests {
             updated_at: 1,
             usage: Some(usage_snapshot("plus")),
             usage_error: None,
+            auth_refresh_blocked: false,
+            auth_refresh_error: None,
         };
 
         assert_eq!(account.resolved_plan_type().as_deref(), Some("team"));
@@ -677,6 +702,8 @@ mod tests {
                 updated_at: 1,
                 usage: None,
                 usage_error: None,
+                auth_refresh_blocked: false,
+                auth_refresh_error: None,
             },
             StoredAccount {
                 id: "second".to_string(),
@@ -690,6 +717,8 @@ mod tests {
                 updated_at: 2,
                 usage: None,
                 usage_error: None,
+                auth_refresh_blocked: false,
+                auth_refresh_error: None,
             },
         ];
 

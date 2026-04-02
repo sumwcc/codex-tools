@@ -9,10 +9,12 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use tokio::sync::Mutex;
 
 use crate::models::ExtractedAuth;
 use crate::models::PreparedOauthLogin;
@@ -408,7 +410,7 @@ pub(crate) fn extract_codex_oauth_tokens(auth_json: &Value) -> Result<CodexOAuth
     })
 }
 
-pub(crate) fn auth_tokens_need_refresh(auth_json: &Value) -> bool {
+pub(crate) fn auth_tokens_expire_within(auth_json: &Value, lead_time_secs: i64) -> bool {
     let Some(tokens) = auth_token_object(auth_json) else {
         return false;
     };
@@ -417,7 +419,7 @@ pub(crate) fn auth_tokens_need_refresh(auth_json: &Value) -> bool {
         Ok(duration) => duration.as_secs() as i64,
         Err(_) => return false,
     };
-    let refresh_deadline = now + 60;
+    let refresh_deadline = now + lead_time_secs.max(0);
 
     ["access_token", "id_token"].iter().any(|field| {
         tokens
@@ -427,6 +429,10 @@ pub(crate) fn auth_tokens_need_refresh(auth_json: &Value) -> bool {
             .map(|exp| exp <= refresh_deadline)
             .unwrap_or(false)
     })
+}
+
+pub(crate) fn auth_tokens_need_refresh(auth_json: &Value) -> bool {
+    auth_tokens_expire_within(auth_json, 60)
 }
 
 /// 使用 auth.json 内的 refresh_token 刷新 ChatGPT OAuth 令牌。
@@ -513,6 +519,14 @@ pub(crate) async fn refresh_chatgpt_auth_tokens(auth_json: &Value) -> Result<Val
 
     update_last_refresh(&mut updated)?;
     Ok(normalize_auth_json_for_codex(updated))
+}
+
+pub(crate) async fn refresh_chatgpt_auth_tokens_serialized(
+    auth_json: &Value,
+    refresh_lock: &Arc<Mutex<()>>,
+) -> Result<Value, String> {
+    let _guard = refresh_lock.lock().await;
+    refresh_chatgpt_auth_tokens(auth_json).await
 }
 
 fn parse_oauth_callback_url(callback_url: &str) -> Result<reqwest::Url, String> {
@@ -936,8 +950,8 @@ mod tests {
             .redirect_uri
             .contains(&format!("localhost:{custom_port}/auth/callback")));
         assert_eq!(pending.redirect_uri, prepared.redirect_uri);
-        assert!(prepared
-            .auth_url
-            .contains(&format!("redirect_uri=http%3A%2F%2Flocalhost%3A{custom_port}%2Fauth%2Fcallback")));
+        assert!(prepared.auth_url.contains(&format!(
+            "redirect_uri=http%3A%2F%2Flocalhost%3A{custom_port}%2Fauth%2Fcallback"
+        )));
     }
 }

@@ -365,6 +365,7 @@
     "updateSettingsFailed": "更新设置失败：{{error}}",
     "usageRefreshed": "用量已刷新",
     "refreshFailed": "刷新失败：{{error}}",
+    "reloginRequired": "账号 {{label}} 需要重新登录授权，已停止自动刷新登录令牌。",
     "restoreAuthFailed": "恢复原账号失败：{{error}}",
     "preparingUpdateDownload": "准备下载更新...",
     "alreadyLatest": "当前已是最新版本",

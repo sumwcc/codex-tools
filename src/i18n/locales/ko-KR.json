@@ -365,6 +365,7 @@
     "updateSettingsFailed": "설정 업데이트 실패: {{error}}",
     "usageRefreshed": "사용량이 갱신되었습니다",
     "refreshFailed": "새로고침 실패: {{error}}",
+    "reloginRequired": "계정 {{label}} 은(는) 다시 로그인해야 합니다. 로그인 토큰 자동 갱신을 중지했습니다.",
     "restoreAuthFailed": "이전 계정 복원 실패: {{error}}",
     "preparingUpdateDownload": "업데이트 다운로드 준비 중...",
     "alreadyLatest": "이미 최신 버전입니다",

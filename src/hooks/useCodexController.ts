@@ -179,6 +179,7 @@ export function useCodexController() {
   const installingUpdateRef = useRef(false);
   const deleteConfirmTimerRef = useRef<number | null>(null);
   const settingsUpdateQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const reloginPromptedAccountKeysRef = useRef<Set<string>>(new Set());
 
   const sortedAccounts = useMemo(() => sortAccountsByRemaining(accounts), [accounts]);
 
@@ -192,8 +193,49 @@ export function useCodexController() {
       items.map((account) => ({
         ...account,
         usageError: account.usageError ? localizeError(account.usageError) : null,
+        authRefreshError: account.authRefreshError ? localizeError(account.authRefreshError) : null,
       })),
     [localizeError],
+  );
+
+  const applyAccounts = useCallback(
+    (items: AccountSummary[], options?: { notifyBlocked?: boolean }) => {
+      const localized = localizeAccounts(items);
+      setAccounts(localized);
+
+      const activeBlockedKeys = new Set(
+        localized
+          .filter((account) => account.authRefreshBlocked && account.authRefreshError)
+          .map((account) => account.accountKey),
+      );
+      reloginPromptedAccountKeysRef.current.forEach((accountKey) => {
+        if (!activeBlockedKeys.has(accountKey)) {
+          reloginPromptedAccountKeysRef.current.delete(accountKey);
+        }
+      });
+
+      if (options?.notifyBlocked === false) {
+        return false;
+      }
+
+      const nextBlockedAccount = localized.find(
+        (account) =>
+          account.authRefreshBlocked &&
+          account.authRefreshError &&
+          !reloginPromptedAccountKeysRef.current.has(account.accountKey),
+      );
+      if (!nextBlockedAccount) {
+        return false;
+      }
+
+      reloginPromptedAccountKeysRef.current.add(nextBlockedAccount.accountKey);
+      setNotice({
+        type: "info",
+        message: copy.notices.reloginRequired(nextBlockedAccount.label),
+      });
+      return true;
+    },
+    [copy.notices, localizeAccounts],
   );
 
   const localizeApiProxyStatus = useCallback(
@@ -244,8 +286,8 @@ export function useCodexController() {
 
   const loadAccounts = useCallback(async () => {
     const data = await invoke<AccountSummary[]>("list_accounts");
-    setAccounts(localizeAccounts(data));
-  }, [localizeAccounts]);
+    applyAccounts(data);
+  }, [applyAccounts]);
 
   const loadSettings = useCallback(async () => {
     const data = await invoke<AppSettings>("get_app_settings");
@@ -332,8 +374,8 @@ export function useCodexController() {
       const data = await invoke<AccountSummary[]>("refresh_all_usage", {
         forceAuthRefresh: !quiet,
       });
-      setAccounts(localizeAccounts(data));
-      if (!quiet) {
+      const promptedRelogin = applyAccounts(data);
+      if (!quiet && !promptedRelogin) {
         setNotice({ type: "ok", message: copy.notices.usageRefreshed });
       }
     } catch (error) {
@@ -348,7 +390,7 @@ export function useCodexController() {
         setRefreshing(false);
       }
     }
-  }, [copy.notices, localizeAccounts, localizeError]);
+  }, [applyAccounts, copy.notices, localizeError]);
 
   const applyImportResult = useCallback(
     async (result: ImportAccountsResult, prefix: string) => {

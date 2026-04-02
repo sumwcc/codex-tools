@@ -11,8 +11,10 @@ use tauri::AppHandle;
 use tauri::Manager;
 
 use crate::auth::account_variant_key;
+use crate::auth::current_auth_account_key;
 use crate::auth::extract_auth;
 use crate::auth::read_current_codex_auth_optional;
+use crate::auth::write_active_codex_auth;
 use crate::models::dedupe_account_variants;
 use crate::models::AccountsStore;
 use crate::models::StoredAccount;
@@ -163,10 +165,55 @@ pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Resul
         updated_at: now,
         usage: None,
         usage_error: None,
+        auth_refresh_blocked: false,
+        auth_refresh_error: None,
     };
     store.accounts.push(stored);
     save_store_to_path(path, &store)?;
     Ok(())
+}
+
+pub(crate) fn update_account_group_refresh_state_in_path(
+    path: &Path,
+    account_key: &str,
+    auth_json: Option<&serde_json::Value>,
+    auth_refresh_blocked: bool,
+    auth_refresh_error: Option<&str>,
+    updated_at: i64,
+    sync_current_auth: bool,
+) -> Result<bool, String> {
+    let mut store = load_store_from_path(path)?;
+    let mut changed = false;
+
+    for account in store
+        .accounts
+        .iter_mut()
+        .filter(|account| account.account_key() == account_key)
+    {
+        if let Some(value) = auth_json {
+            account.auth_json = value.clone();
+        }
+        account.auth_refresh_blocked = auth_refresh_blocked;
+        account.auth_refresh_error = auth_refresh_error.map(ToString::to_string);
+        account.updated_at = updated_at;
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    save_store_to_path(path, &store)?;
+
+    if sync_current_auth
+        && !auth_refresh_blocked
+        && auth_json.is_some()
+        && current_auth_account_key().as_deref() == Some(account_key)
+    {
+        write_active_codex_auth(auth_json.expect("checked is_some above"))?;
+    }
+
+    Ok(true)
 }
 
 #[cfg(feature = "desktop")]
@@ -517,6 +564,8 @@ mod tests {
                 updated_at,
                 usage: None,
                 usage_error: None,
+                auth_refresh_blocked: false,
+                auth_refresh_error: None,
             }],
             settings: Default::default(),
         }
@@ -594,6 +643,8 @@ mod tests {
                 updated_at: 1,
                 usage: None,
                 usage_error: None,
+                auth_refresh_blocked: false,
+                auth_refresh_error: None,
             }],
             settings: Default::default(),
         };

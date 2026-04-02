@@ -16,9 +16,9 @@ mod tray;
 mod usage;
 mod utils;
 
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
-use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
@@ -53,6 +53,7 @@ use state::AppState;
 use state::OauthCallbackListenerHandle;
 
 const OAUTH_CALLBACK_FINISHED_EVENT: &str = "oauth-callback-finished";
+const AUTH_KEEPALIVE_INTERVAL_SECS: u64 = 300;
 
 fn escape_html(input: &str) -> String {
     input
@@ -113,12 +114,9 @@ fn read_oauth_request_path(stream: &mut std::net::TcpStream) -> Result<String, S
         .ok_or_else(|| "OAuth 回调请求缺少路径".to_string())
 }
 
-fn build_oauth_callback_url(
-    redirect_uri: &str,
-    path: &str,
-) -> Result<String, String> {
-    let mut callback_url =
-        reqwest::Url::parse(redirect_uri).map_err(|error| format!("OAuth redirect_uri 无效: {error}"))?;
+fn build_oauth_callback_url(redirect_uri: &str, path: &str) -> Result<String, String> {
+    let mut callback_url = reqwest::Url::parse(redirect_uri)
+        .map_err(|error| format!("OAuth redirect_uri 无效: {error}"))?;
     let request_url = reqwest::Url::parse(&format!("http://localhost{path}"))
         .map_err(|error| format!("OAuth 回调路径无效: {error}"))?;
     callback_url.set_path(request_url.path());
@@ -335,6 +333,7 @@ fn run_oauth_callback_listener(
                             "授权完成",
                             "账号已经写入 Codex Tools，可以回到应用继续操作。",
                         );
+                        restore_main_window(&app);
                         tauri::async_runtime::block_on(async {
                             emit_oauth_callback_finished(
                                 &app,
@@ -353,6 +352,7 @@ fn run_oauth_callback_listener(
                             "授权失败",
                             &error,
                         );
+                        restore_main_window(&app);
                         if !error.contains("会话已失效") {
                             tauri::async_runtime::block_on(async {
                                 emit_oauth_callback_finished(
@@ -646,7 +646,8 @@ async fn prepare_oauth_login(
         let mut guard = state.pending_oauth_login.lock().await;
         *guard = Some(pending.clone());
     }
-    if let Err(error) = start_oauth_callback_listener(&app, state.inner(), listener, &pending).await {
+    if let Err(error) = start_oauth_callback_listener(&app, state.inner(), listener, &pending).await
+    {
         let mut guard = state.pending_oauth_login.lock().await;
         *guard = None;
         return Err(error);
@@ -742,14 +743,57 @@ async fn switch_account_and_launch(
         .ok_or_else(|| "找不到要切换的账号".to_string())?;
 
     if auth::auth_tokens_need_refresh(&account.auth_json) {
-        let refreshed_auth = auth::refresh_chatgpt_auth_tokens(&account.auth_json)
-            .await
-            .map_err(|error| {
-                format!(
-                    "切换账号前刷新登录令牌失败: {}",
-                    normalize_switch_refresh_error(&error)
-                )
-            })?;
+        if account.auth_refresh_blocked {
+            return Err(format!(
+                "切换账号前刷新登录令牌失败: {}",
+                account
+                    .auth_refresh_error
+                    .clone()
+                    .unwrap_or_else(|| "授权过期，请重新登录授权。".to_string())
+            ));
+        }
+
+        let refreshed_auth = match auth::refresh_chatgpt_auth_tokens_serialized(
+            &account.auth_json,
+            &state.auth_refresh_lock,
+        )
+        .await
+        {
+            Ok(refreshed_auth) => refreshed_auth,
+            Err(error) => {
+                let normalized_error = normalize_switch_refresh_error(&error);
+                let should_block_refresh = normalized_error
+                    == "当前账号的 refresh_token 已失效或已被轮换，请重新登录授权。"
+                    || normalized_error == "当前账号授权已过期，请重新登录授权。";
+
+                if should_block_refresh {
+                    let blocked_message = "授权过期，请重新登录授权。";
+                    match app.path().app_data_dir() {
+                        Ok(data_dir) => {
+                            let store_path = store::account_store_path_from_data_dir(&data_dir);
+                            if let Err(persist_error) =
+                                store::update_account_group_refresh_state_in_path(
+                                    &store_path,
+                                    &account.account_key(),
+                                    None,
+                                    true,
+                                    Some(blocked_message),
+                                    utils::now_unix_seconds(),
+                                    true,
+                                )
+                            {
+                                log::warn!("切换失败后写回账号停刷状态失败: {persist_error}");
+                            }
+                        }
+                        Err(path_error) => {
+                            log::warn!("切换失败后获取应用数据目录失败: {path_error}");
+                        }
+                    }
+                }
+
+                return Err(format!("切换账号前刷新登录令牌失败: {normalized_error}"));
+            }
+        };
 
         account.auth_json = refreshed_auth.clone();
 
@@ -766,6 +810,8 @@ async fn switch_account_and_launch(
             .ok_or_else(|| "找不到要切换的账号".to_string())?;
         stored_account.auth_json = refreshed_auth;
         stored_account.updated_at = refreshed_at;
+        stored_account.auth_refresh_blocked = false;
+        stored_account.auth_refresh_error = None;
         store::save_store(&app, &latest_store)?;
     }
 
@@ -1083,6 +1129,23 @@ async fn auto_start_api_proxy_if_enabled(app: AppHandle) {
     }
 }
 
+fn start_auth_keepalive_loop(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let state = app.state::<AppState>();
+            match account_service::refresh_all_usage_internal(&app, state.inner(), true).await {
+                Ok(summaries) => {
+                    let _ = tray::update_macos_tray_snapshot(&app, &summaries);
+                }
+                Err(error) => {
+                    log::warn!("后台账号保活失败: {error}");
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(AUTH_KEEPALIVE_INTERVAL_SECS)).await;
+        }
+    });
+}
+
 // ===== App Bootstrap =====
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1114,6 +1177,7 @@ pub fn run() {
             // 启动阶段先同步当前本机登录账号，再初始化状态栏，保证首次展示即一致。
             store::sync_current_auth_account_on_startup(app.handle())?;
             tray::setup_system_tray(app.handle())?;
+            start_auth_keepalive_loop(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

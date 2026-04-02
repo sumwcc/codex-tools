@@ -365,6 +365,7 @@
     "updateSettingsFailed": "Failed to update settings: {{error}}",
     "usageRefreshed": "Usage refreshed",
     "refreshFailed": "Refresh failed: {{error}}",
+    "reloginRequired": "Account {{label}} needs to sign in again. Automatic token refresh has been paused.",
     "restoreAuthFailed": "Failed to restore previous account: {{error}}",
     "preparingUpdateDownload": "Preparing update download...",
     "alreadyLatest": "Already up to date",

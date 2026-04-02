@@ -171,6 +171,10 @@ export function AccountCard({
   const fiveHourReset = formatResetValue(fiveHour?.resetAt, locale);
   const oneWeekReset = formatResetValue(oneWeek?.resetAt, locale);
   const normalizedDraftLabel = draftLabel.trim();
+  const footerErrors = [
+    selectedAccount.authRefreshError,
+    selectedAccount.usageError,
+  ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
 
   const handleLaunch = () => {
     if (isSwitching) return;
@@ -342,7 +346,11 @@ export function AccountCard({
       </div>
 
       <footer className="cardFooter">
-        {selectedAccount.usageError && <p className="errorText">{selectedAccount.usageError}</p>}
+        {footerErrors.map((message) => (
+          <p key={message} className="errorText">
+            {message}
+          </p>
+        ))}
         <button
           className={`ghost cardLaunchButton ${isSwitching ? "isBusy" : ""}`}
           onClick={handleLaunch}

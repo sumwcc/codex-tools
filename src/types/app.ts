@@ -31,6 +31,8 @@ export type AccountSummary = {
   updatedAt: number;
   usage: UsageSnapshot | null;
   usageError: string | null;
+  authRefreshBlocked: boolean;
+  authRefreshError: string | null;
   isCurrent: boolean;
 };
 

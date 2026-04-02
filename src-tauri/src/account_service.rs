@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use rfd::FileDialog;
 use tauri::AppHandle;
+use tauri::Manager;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
 use crate::auth::account_group_key;
 use crate::auth::account_variant_key;
-use crate::auth::auth_variant_key;
+use crate::auth::auth_tokens_expire_within;
 use crate::auth::current_auth_account_key;
 use crate::auth::current_auth_variant_key;
 use crate::auth::extract_auth;
@@ -19,7 +20,7 @@ use crate::auth::normalize_imported_auth_json;
 use crate::auth::normalize_plan_type_key;
 use crate::auth::read_current_codex_auth;
 use crate::auth::read_current_codex_auth_optional;
-use crate::auth::refresh_chatgpt_auth_tokens;
+use crate::auth::refresh_chatgpt_auth_tokens_serialized;
 use crate::models::dedupe_account_variants;
 use crate::models::AccountSummary;
 use crate::models::AccountsStore;
@@ -29,8 +30,10 @@ use crate::models::ImportAccountsResult;
 use crate::models::StoredAccount;
 use crate::models::UsageSnapshot;
 use crate::state::AppState;
+use crate::store::account_store_path_from_data_dir;
 use crate::store::load_store;
 use crate::store::save_store;
+use crate::store::update_account_group_refresh_state_in_path;
 use crate::usage::fetch_usage_snapshot;
 use crate::utils::now_unix_seconds;
 use crate::utils::set_private_permissions;
@@ -40,6 +43,7 @@ const DEACTIVATED_WORKSPACE_NOTICE: &str = "该账号已被踢出 team 组织，
 const DEACTIVATED_ACCOUNT_NOTICE: &str = "账号被封禁，请检查邮箱";
 const AUTH_EXPIRED_NOTICE: &str = "授权过期，请重新登录授权。";
 const EXPORT_ARCHIVE_ENTRY_NAME: &str = "accounts.json";
+const KEEPALIVE_REFRESH_WINDOW_SECS: i64 = 10 * 60;
 
 struct PreparedImport {
     principal_id: String,
@@ -225,161 +229,61 @@ pub(crate) async fn update_account_label_internal(
 ///
 /// 为避免“后台刷新覆盖新增账号”的竞态：
 /// 1) 先拿快照用于网络请求；
-/// 2) 请求完成后重新加载最新 store 并按记录 id 合并写回。
+/// 2) 请求完成后重新加载最新 store 并按账号组写回。
+#[derive(Debug)]
+struct RefreshTarget {
+    account_key: String,
+    auth_json: serde_json::Value,
+    auth_is_current: bool,
+    auth_refresh_blocked: bool,
+    auth_refresh_error: Option<String>,
+    updated_at: i64,
+}
+
+#[derive(Debug)]
+struct RefreshOutcome {
+    usage: Option<crate::models::UsageSnapshot>,
+    usage_error: Option<String>,
+    updated_at: i64,
+    auth_plan_type: Option<String>,
+    auth_email: Option<String>,
+    auth_json: serde_json::Value,
+    auth_is_current: bool,
+    auth_refreshed: bool,
+    auth_refresh_blocked: bool,
+    auth_refresh_error: Option<String>,
+}
+
 pub(crate) async fn refresh_all_usage_internal(
     app: &AppHandle,
     state: &AppState,
     force_auth_refresh: bool,
 ) -> Result<Vec<AccountSummary>, String> {
-    #[derive(Debug)]
-    struct RefreshTarget {
-        record_id: String,
-        auth_json: serde_json::Value,
-        auth_is_current: bool,
-    }
-
     let current_auth_override: Option<(String, serde_json::Value)> =
         read_current_codex_auth_optional()
             .ok()
             .flatten()
             .and_then(|auth_json| {
-                auth_variant_key(&auth_json).map(|variant_key| (variant_key, auth_json))
+                extract_auth(&auth_json).ok().map(|auth| {
+                    (
+                        account_group_key(&auth.principal_id, &auth.account_id),
+                        auth_json,
+                    )
+                })
             });
 
     let refresh_targets: Vec<RefreshTarget> = {
         let _guard = state.store_lock.lock().await;
         let store = load_store(app)?;
-        store
-            .accounts
-            .into_iter()
-            .map(|account| {
-                let account_variant_key = account.variant_key();
-                let (auth_json, auth_is_current) = current_auth_override
-                    .as_ref()
-                    .and_then(|(variant_key, auth_json)| {
-                        if variant_key == &account_variant_key {
-                            Some((auth_json.clone(), true))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or((account.auth_json, false));
-
-                RefreshTarget {
-                    record_id: account.id,
-                    auth_json,
-                    auth_is_current,
-                }
-            })
-            .collect()
+        build_refresh_targets(store.accounts, current_auth_override.as_ref())
     };
 
-    #[derive(Debug)]
-    struct RefreshOutcome {
-        usage: Option<crate::models::UsageSnapshot>,
-        usage_error: Option<String>,
-        updated_at: i64,
-        auth_plan_type: Option<String>,
-        auth_email: Option<String>,
-        auth_json: serde_json::Value,
-        auth_is_current: bool,
-        auth_refreshed: bool,
-    }
-
-    let mut outcomes: HashMap<String, RefreshOutcome> = HashMap::new();
-    let mut handles = Vec::with_capacity(refresh_targets.len());
+    let mut outcomes: HashMap<String, RefreshOutcome> =
+        HashMap::with_capacity(refresh_targets.len());
     for target in refresh_targets {
-        handles.push(tauri::async_runtime::spawn(async move {
-            let mut working_auth_json = target.auth_json;
-            let mut refresh_error: Option<String> = None;
-            let mut auth_refreshed = false;
-
-            if force_auth_refresh {
-                match refresh_chatgpt_auth_tokens(&working_auth_json).await {
-                    Ok(refreshed) => {
-                        working_auth_json = refreshed;
-                        auth_refreshed = true;
-                    }
-                    Err(err) => {
-                        refresh_error = Some(err);
-                    }
-                }
-            }
-
-            let mut extracted = extract_auth(&working_auth_json);
-            let mut fetch_result = match &extracted {
-                Ok(auth) => fetch_usage_snapshot(&auth.access_token, &auth.account_id).await,
-                Err(err) => Err(err.clone()),
-            };
-
-            if !force_auth_refresh && should_retry_with_token_refresh(&fetch_result) {
-                match refresh_chatgpt_auth_tokens(&working_auth_json).await {
-                    Ok(refreshed) => {
-                        working_auth_json = refreshed;
-                        auth_refreshed = true;
-                        extracted = extract_auth(&working_auth_json);
-                        fetch_result = match &extracted {
-                            Ok(auth) => {
-                                fetch_usage_snapshot(&auth.access_token, &auth.account_id).await
-                            }
-                            Err(err) => Err(err.clone()),
-                        };
-                    }
-                    Err(err) => {
-                        refresh_error = Some(err);
-                    }
-                }
-            }
-
-            let (auth_plan_type, auth_email) = match &extracted {
-                Ok(auth) => (auth.plan_type.clone(), auth.email.clone()),
-                Err(_) => (None, None),
-            };
-
-            let updated_at = now_unix_seconds();
-            let outcome = match fetch_result {
-                Ok(snapshot) => RefreshOutcome {
-                    usage: Some(snapshot),
-                    usage_error: None,
-                    updated_at,
-                    auth_plan_type,
-                    auth_email,
-                    auth_json: working_auth_json,
-                    auth_is_current: target.auth_is_current,
-                    auth_refreshed,
-                },
-                Err(err) => {
-                    let combined_error = if let Some(refresh_err) = refresh_error {
-                        format!("{err} | 令牌刷新失败: {refresh_err}")
-                    } else {
-                        err
-                    };
-                    let display_error = normalize_usage_error_message(&combined_error);
-                    RefreshOutcome {
-                        usage: None,
-                        usage_error: Some(display_error),
-                        updated_at,
-                        auth_plan_type,
-                        auth_email,
-                        auth_json: working_auth_json,
-                        auth_is_current: target.auth_is_current,
-                        auth_refreshed,
-                    }
-                }
-            };
-            (target.record_id, outcome)
-        }));
-    }
-
-    for handle in handles {
-        match handle.await {
-            Ok((record_id, outcome)) => {
-                outcomes.insert(record_id, outcome);
-            }
-            Err(err) => {
-                log::warn!("并行刷新账号用量任务异常: {err}");
-            }
-        }
+        let account_key = target.account_key.clone();
+        let outcome = refresh_usage_for_target(app, state, &target, force_auth_refresh).await;
+        outcomes.insert(account_key, outcome);
     }
 
     let store = {
@@ -387,12 +291,14 @@ pub(crate) async fn refresh_all_usage_internal(
         let mut latest_store = load_store(app)?;
 
         for account in &mut latest_store.accounts {
-            let Some(outcome) = outcomes.get(&account.id) else {
+            let Some(outcome) = outcomes.get(&account.account_key()) else {
                 continue;
             };
 
             account.updated_at = outcome.updated_at;
             account.auth_json = outcome.auth_json.clone();
+            account.auth_refresh_blocked = outcome.auth_refresh_blocked;
+            account.auth_refresh_error = outcome.auth_refresh_error.clone();
             account.email = outcome.auth_email.clone().or(account.email.clone());
             let preferred_auth_plan_type = if outcome.auth_is_current || outcome.auth_refreshed {
                 outcome.auth_plan_type.clone()
@@ -407,12 +313,14 @@ pub(crate) async fn refresh_all_usage_internal(
                 resolved_snapshot.plan_type = resolved_plan_type.clone();
                 account.plan_type = resolved_plan_type;
                 account.usage = Some(resolved_snapshot);
-                account.usage_error = None;
-            } else if let Some(err) = outcome.usage_error.clone() {
+            }
+            if let Some(err) = outcome.usage_error.clone() {
                 if preferred_auth_plan_type.is_some() {
                     account.plan_type = preferred_auth_plan_type;
                 }
                 account.usage_error = Some(err);
+            } else if outcome.usage.is_some() {
+                account.usage_error = None;
             }
         }
 
@@ -438,6 +346,255 @@ pub(crate) async fn refresh_all_usage_internal(
     Ok(summaries)
 }
 
+fn build_refresh_targets(
+    accounts: Vec<StoredAccount>,
+    current_auth_override: Option<&(String, serde_json::Value)>,
+) -> Vec<RefreshTarget> {
+    let mut targets_by_account_key: HashMap<String, RefreshTarget> = HashMap::new();
+
+    for account in accounts {
+        let account_key = account.account_key();
+        let current_override = current_auth_override
+            .filter(|(current_account_key, _)| current_account_key == &account_key);
+        let auth_is_current = current_override.is_some();
+        let auth_json = current_override
+            .map(|(_, auth_json)| auth_json.clone())
+            .unwrap_or(account.auth_json);
+
+        let candidate = RefreshTarget {
+            account_key: account_key.clone(),
+            auth_json,
+            auth_is_current,
+            auth_refresh_blocked: account.auth_refresh_blocked,
+            auth_refresh_error: account.auth_refresh_error.clone(),
+            updated_at: account.updated_at,
+        };
+
+        match targets_by_account_key.get_mut(&account_key) {
+            Some(existing) => {
+                if should_replace_refresh_target(existing, &candidate) {
+                    *existing = candidate;
+                } else if existing.auth_refresh_error.is_none() {
+                    existing.auth_refresh_error = candidate.auth_refresh_error.clone();
+                }
+            }
+            None => {
+                targets_by_account_key.insert(account_key, candidate);
+            }
+        }
+    }
+
+    let mut targets = targets_by_account_key.into_values().collect::<Vec<_>>();
+    targets.sort_by(|left, right| {
+        right
+            .auth_is_current
+            .cmp(&left.auth_is_current)
+            .then(right.updated_at.cmp(&left.updated_at))
+            .then(left.account_key.cmp(&right.account_key))
+    });
+    targets
+}
+
+fn should_replace_refresh_target(existing: &RefreshTarget, candidate: &RefreshTarget) -> bool {
+    if candidate.auth_is_current != existing.auth_is_current {
+        return candidate.auth_is_current;
+    }
+    if candidate.auth_refresh_blocked != existing.auth_refresh_blocked {
+        return !candidate.auth_refresh_blocked;
+    }
+    candidate.updated_at > existing.updated_at
+}
+
+async fn refresh_usage_for_target(
+    app: &AppHandle,
+    state: &AppState,
+    target: &RefreshTarget,
+    force_auth_refresh: bool,
+) -> RefreshOutcome {
+    let mut working_auth_json = target.auth_json.clone();
+    let mut refresh_error: Option<String> = None;
+    let mut auth_refreshed = false;
+    let mut auth_refresh_blocked = target.auth_refresh_blocked;
+    let mut auth_refresh_error = target.auth_refresh_error.clone();
+
+    if force_auth_refresh
+        && !auth_refresh_blocked
+        && auth_tokens_expire_within(&working_auth_json, KEEPALIVE_REFRESH_WINDOW_SECS)
+    {
+        match refresh_chatgpt_auth_tokens_serialized(&working_auth_json, &state.auth_refresh_lock)
+            .await
+        {
+            Ok(refreshed) => {
+                working_auth_json = refreshed;
+                auth_refreshed = true;
+                auth_refresh_blocked = false;
+                auth_refresh_error = None;
+                if let Err(err) = persist_account_refresh_state(
+                    app,
+                    state,
+                    &target.account_key,
+                    Some(&working_auth_json),
+                    false,
+                    None,
+                )
+                .await
+                {
+                    refresh_error = Some(err);
+                }
+            }
+            Err(err) => {
+                handle_refresh_failure(
+                    app,
+                    state,
+                    &target.account_key,
+                    &err,
+                    &mut auth_refresh_blocked,
+                    &mut auth_refresh_error,
+                    &mut refresh_error,
+                )
+                .await;
+            }
+        }
+    }
+
+    let mut extracted = extract_auth(&working_auth_json);
+    let mut fetch_result = match &extracted {
+        Ok(auth) => fetch_usage_snapshot(&auth.access_token, &auth.account_id).await,
+        Err(err) => Err(err.clone()),
+    };
+
+    if !auth_refresh_blocked && should_retry_with_token_refresh(&fetch_result) {
+        match refresh_chatgpt_auth_tokens_serialized(&working_auth_json, &state.auth_refresh_lock)
+            .await
+        {
+            Ok(refreshed) => {
+                working_auth_json = refreshed;
+                auth_refreshed = true;
+                auth_refresh_blocked = false;
+                auth_refresh_error = None;
+                if let Err(err) = persist_account_refresh_state(
+                    app,
+                    state,
+                    &target.account_key,
+                    Some(&working_auth_json),
+                    false,
+                    None,
+                )
+                .await
+                {
+                    refresh_error = Some(err);
+                }
+                extracted = extract_auth(&working_auth_json);
+                fetch_result = match &extracted {
+                    Ok(auth) => fetch_usage_snapshot(&auth.access_token, &auth.account_id).await,
+                    Err(err) => Err(err.clone()),
+                };
+            }
+            Err(err) => {
+                handle_refresh_failure(
+                    app,
+                    state,
+                    &target.account_key,
+                    &err,
+                    &mut auth_refresh_blocked,
+                    &mut auth_refresh_error,
+                    &mut refresh_error,
+                )
+                .await;
+            }
+        }
+    }
+
+    let (auth_plan_type, auth_email) = match &extracted {
+        Ok(auth) => (auth.plan_type.clone(), auth.email.clone()),
+        Err(_) => (None, None),
+    };
+
+    let updated_at = now_unix_seconds();
+    let usage = fetch_result.as_ref().ok().cloned();
+    let usage_error = match fetch_result {
+        Ok(_) => refresh_error.as_deref().map(normalize_usage_error_message),
+        Err(err) => {
+            let combined_error = if let Some(refresh_err) = refresh_error.as_deref() {
+                format!("{err} | 令牌刷新失败: {refresh_err}")
+            } else {
+                err
+            };
+            Some(normalize_usage_error_message(&combined_error))
+        }
+    };
+
+    RefreshOutcome {
+        usage,
+        usage_error,
+        updated_at,
+        auth_plan_type,
+        auth_email,
+        auth_json: working_auth_json,
+        auth_is_current: target.auth_is_current,
+        auth_refreshed,
+        auth_refresh_blocked,
+        auth_refresh_error,
+    }
+}
+
+async fn handle_refresh_failure(
+    app: &AppHandle,
+    state: &AppState,
+    account_key: &str,
+    raw_error: &str,
+    auth_refresh_blocked: &mut bool,
+    auth_refresh_error: &mut Option<String>,
+    refresh_error: &mut Option<String>,
+) {
+    if should_suspend_auth_keepalive(raw_error) {
+        let normalized_error = normalize_usage_error_message(raw_error);
+        *auth_refresh_blocked = true;
+        *auth_refresh_error = Some(normalized_error.clone());
+        if let Err(err) = persist_account_refresh_state(
+            app,
+            state,
+            account_key,
+            None,
+            true,
+            Some(normalized_error.as_str()),
+        )
+        .await
+        {
+            *refresh_error = Some(err);
+        }
+        return;
+    }
+
+    *refresh_error = Some(raw_error.to_string());
+}
+
+async fn persist_account_refresh_state(
+    app: &AppHandle,
+    state: &AppState,
+    account_key: &str,
+    auth_json: Option<&serde_json::Value>,
+    auth_refresh_blocked: bool,
+    auth_refresh_error: Option<&str>,
+) -> Result<(), String> {
+    let _guard = state.store_lock.lock().await;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取应用数据目录: {error}"))?;
+    let store_path = account_store_path_from_data_dir(&data_dir);
+    update_account_group_refresh_state_in_path(
+        &store_path,
+        account_key,
+        auth_json,
+        auth_refresh_blocked,
+        auth_refresh_error,
+        now_unix_seconds(),
+        true,
+    )?;
+    Ok(())
+}
+
 fn should_retry_with_token_refresh(
     fetch_result: &Result<crate::models::UsageSnapshot, String>,
 ) -> bool {
@@ -453,6 +610,22 @@ fn should_retry_with_token_refresh(
     }
 }
 
+fn should_suspend_auth_keepalive(raw_error: &str) -> bool {
+    let normalized = raw_error.to_ascii_lowercase();
+    normalized.contains("refresh_token_reused")
+        || normalized.contains("provided authentication token is expired")
+        || normalized
+            .contains("your refresh token has already been used to generate a new access token")
+        || normalized.contains("please try signing in again")
+        || normalized.contains("token is expired")
+        || normalized.contains("deactivated_workspace")
+        || normalized.contains("your openai account has been deactivated")
+        || normalized.contains("account has been deactivated")
+        || normalized.contains("account deactivated")
+        || normalized.contains("deactivated_user")
+        || normalized.contains("auth.json 缺少 refresh_token")
+}
+
 fn normalize_usage_error_message(raw_error: &str) -> String {
     let normalized = raw_error.to_ascii_lowercase();
     if normalized.contains("deactivated_workspace") {
@@ -466,11 +639,13 @@ fn normalize_usage_error_message(raw_error: &str) -> String {
     {
         return DEACTIVATED_ACCOUNT_NOTICE.to_string();
     }
-    if normalized.contains("provided authentication token is expired")
+    if normalized.contains("refresh_token_reused")
+        || normalized.contains("provided authentication token is expired")
         || normalized
             .contains("your refresh token has already been used to generate a new access token")
         || normalized.contains("please try signing in again")
         || normalized.contains("token is expired")
+        || normalized.contains("auth.json 缺少 refresh_token")
     {
         return AUTH_EXPIRED_NOTICE.to_string();
     }
@@ -657,7 +832,8 @@ fn upsert_prepared_import(
     let resolved_label = normalize_custom_label(label)
         .unwrap_or_else(|| fallback_account_label(email.as_deref(), &account_id));
     let resolved_plan_type = plan_type.or_else(|| {
-        usage.as_ref()
+        usage
+            .as_ref()
             .and_then(|snapshot| snapshot.plan_type.clone())
     });
     let resolved_account_key = account_group_key(&principal_id, &account_id);
@@ -717,6 +893,8 @@ fn upsert_prepared_import(
             updated_at: now,
             usage,
             usage_error: None,
+            auth_refresh_blocked: false,
+            auth_refresh_error: None,
         };
         let summary = stored.to_summary(current_account_key, current_variant_key);
         store.accounts.push(stored);
@@ -734,6 +912,8 @@ fn upsert_prepared_import(
             updated_at: now,
             usage,
             usage_error: None,
+            auth_refresh_blocked: false,
+            auth_refresh_error: None,
         };
         let summary = stored.to_summary(current_account_key, current_variant_key);
         store.accounts.push(stored);
@@ -759,6 +939,8 @@ fn apply_prepared_import_to_account(
     existing.updated_at = now;
     existing.usage = usage;
     existing.usage_error = None;
+    existing.auth_refresh_blocked = false;
+    existing.auth_refresh_error = None;
 }
 
 fn parse_auth_json_content(raw: &str) -> Result<serde_json::Value, String> {
@@ -860,6 +1042,8 @@ mod tests {
             updated_at: 1,
             usage: None,
             usage_error: None,
+            auth_refresh_blocked: false,
+            auth_refresh_error: None,
         });
 
         let prepared = prepared_import(

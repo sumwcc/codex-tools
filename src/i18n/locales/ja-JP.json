@@ -365,6 +365,7 @@
     "updateSettingsFailed": "設定の更新に失敗しました: {{error}}",
     "usageRefreshed": "使用量を更新しました",
     "refreshFailed": "更新に失敗しました: {{error}}",
+    "reloginRequired": "アカウント {{label}} は再度ログインが必要です。ログイントークンの自動更新を停止しました。",
     "restoreAuthFailed": "前のアカウントの復元に失敗しました: {{error}}",
     "preparingUpdateDownload": "アップデートのダウンロード準備中...",
     "alreadyLatest": "すでに最新です",

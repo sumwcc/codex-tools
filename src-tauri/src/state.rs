@@ -54,6 +54,7 @@ pub(crate) struct OauthCallbackListenerHandle {
 /// - `cloudflared` 维护公网隧道进程与当前状态。
 pub(crate) struct AppState {
     pub(crate) store_lock: Arc<Mutex<()>>,
+    pub(crate) auth_refresh_lock: Arc<Mutex<()>>,
     pub(crate) oauth_flow_lock: Arc<Mutex<()>>,
     pub(crate) pending_oauth_login: Mutex<Option<PendingOauthLogin>>,
     pub(crate) oauth_listener: Mutex<Option<OauthCallbackListenerHandle>>,
@@ -65,6 +66,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             store_lock: Arc::new(Mutex::new(())),
+            auth_refresh_lock: Arc::new(Mutex::new(())),
             oauth_flow_lock: Arc::new(Mutex::new(())),
             pending_oauth_login: Mutex::new(None),
             oauth_listener: Mutex::new(None),
