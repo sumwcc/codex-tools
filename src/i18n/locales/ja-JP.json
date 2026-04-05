@@ -17,7 +17,8 @@
   "metaStrip": {
     "ariaLabel": "アカウント概要",
     "accountCount": "アカウント数",
-    "currentActive": "現在アクティブ"
+    "currentActive": "現在アクティブ",
+    "exportAll": "すべてエクスポート"
   },
   "addAccount": {
     "smartSwitch": "スマート切替",

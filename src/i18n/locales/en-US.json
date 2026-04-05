@@ -17,7 +17,8 @@
   "metaStrip": {
     "ariaLabel": "Account overview",
     "accountCount": "Accounts",
-    "currentActive": "Active now"
+    "currentActive": "Active now",
+    "exportAll": "Export all"
   },
   "addAccount": {
     "smartSwitch": "Smart switch",

@@ -17,7 +17,8 @@
   "metaStrip": {
     "ariaLabel": "계정 개요",
     "accountCount": "계정 수",
-    "currentActive": "현재 활성"
+    "currentActive": "현재 활성",
+    "exportAll": "전체 내보내기"
   },
   "addAccount": {
     "smartSwitch": "스마트 전환",

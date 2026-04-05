@@ -62,6 +62,7 @@ export type MessageCatalog = {
     ariaLabel: string;
     accountCount: string;
     currentActive: string;
+    exportAll: string;
   };
   addAccount: {
     smartSwitch: string;

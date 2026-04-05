@@ -17,7 +17,8 @@
   "metaStrip": {
     "ariaLabel": "Обзор аккаунтов",
     "accountCount": "Аккаунты",
-    "currentActive": "Активен сейчас"
+    "currentActive": "Активен сейчас",
+    "exportAll": "Экспортировать все"
   },
   "addAccount": {
     "smartSwitch": "Умное переключение",

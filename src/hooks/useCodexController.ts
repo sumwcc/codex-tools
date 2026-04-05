@@ -919,7 +919,7 @@ export function useCodexController() {
     ],
   );
 
-  const onExportAccounts = useCallback(async (account: AccountSummary) => {
+  const onExportAccounts = useCallback(async (account?: AccountSummary) => {
     if (exportingAccounts) {
       return;
     }
@@ -927,7 +927,7 @@ export function useCodexController() {
     setExportingAccounts(true);
     try {
       const exportedPath = await invoke<string | null>("export_accounts_zip", {
-        accountKey: account.accountKey,
+        accountKey: account?.accountKey ?? null,
       });
       if (exportedPath) {
         setNotice({ type: "ok", message: copy.notices.accountsExported });

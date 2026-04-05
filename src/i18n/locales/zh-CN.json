@@ -17,7 +17,8 @@
   "metaStrip": {
     "ariaLabel": "账号概览",
     "accountCount": "账号数",
-    "currentActive": "当前活跃"
+    "currentActive": "当前活跃",
+    "exportAll": "全部导出"
   },
   "addAccount": {
     "smartSwitch": "智能切换",

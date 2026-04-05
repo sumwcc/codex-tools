@@ -161,6 +161,8 @@ function App() {
                             <div className="accountsHero">
                                 <MetaStrip
                                     accountCount={accounts.length}
+                                    exportingAccounts={exportingAccounts}
+                                    onExportAccounts={() => void onExportAccounts()}
                                 />
                                 <AddAccountSection
                                     onOpenAddDialog={onOpenAddDialog}
