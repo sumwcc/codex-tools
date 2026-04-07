@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   apiProxyPort: 8787,
   remoteServers: [],
   locale: DEFAULT_LOCALE,
+  skippedUpdateVersion: null,
 };
 const DEFAULT_API_PROXY_STATUS: ApiProxyStatus = {
   running: false,
@@ -179,6 +180,7 @@ export function useCodexController() {
   const installingUpdateRef = useRef(false);
   const deleteConfirmTimerRef = useRef<number | null>(null);
   const settingsUpdateQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
   const reloginPromptedAccountKeysRef = useRef<Set<string>>(new Set());
 
   const sortedAccounts = useMemo(() => sortAccountsByRemaining(accounts), [accounts]);
@@ -291,6 +293,7 @@ export function useCodexController() {
 
   const loadSettings = useCallback(async () => {
     const data = await invoke<AppSettings>("get_app_settings");
+    settingsRef.current = data;
     setSettings(data);
   }, []);
 
@@ -340,6 +343,7 @@ export function useCodexController() {
 
         try {
           const data = await invoke<AppSettings>("update_app_settings", { patch });
+          settingsRef.current = data;
           setSettings(data);
           if (!options?.silent) {
             setNotice({ type: "ok", message: copy.notices.settingsUpdated });
@@ -498,6 +502,11 @@ export function useCodexController() {
       try {
         const update = await check();
         if (update) {
+          if (quiet && settingsRef.current.skippedUpdateVersion === update.version) {
+            return;
+          }
+
+          setUpdateProgress(null);
           setPendingUpdate({
             currentVersion: update.currentVersion,
             version: update.version,
@@ -511,10 +520,10 @@ export function useCodexController() {
               message: copy.notices.foundNewVersion(update.version, update.currentVersion),
             });
           }
-          void installPendingUpdate(update);
         } else {
           setPendingUpdate(null);
           setUpdateDialogOpen(false);
+          setUpdateProgress(null);
           if (!quiet) {
             setNotice({ type: "ok", message: copy.notices.alreadyLatest });
           }
@@ -532,7 +541,7 @@ export function useCodexController() {
         }
       }
     },
-    [copy.notices, installPendingUpdate, localizeError],
+    [copy.notices, localizeError],
   );
 
   const openManualDownloadPage = useCallback(async () => {
@@ -560,6 +569,20 @@ export function useCodexController() {
   const closeUpdateDialog = useCallback(() => {
     setUpdateDialogOpen(false);
   }, []);
+
+  const skipPendingUpdateVersion = useCallback(async () => {
+    if (!pendingUpdate) {
+      return;
+    }
+
+    setPendingUpdate(null);
+    setUpdateProgress(null);
+    setUpdateDialogOpen(false);
+    await updateSettings(
+      { skippedUpdateVersion: pendingUpdate.version },
+      { silent: true, keepInteractive: true },
+    );
+  }, [pendingUpdate, updateSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1574,6 +1597,7 @@ export function useCodexController() {
     updateProgress,
     pendingUpdate,
     updateDialogOpen,
+    skipPendingUpdateVersion,
     notice,
     openExternalUrl,
     settings,

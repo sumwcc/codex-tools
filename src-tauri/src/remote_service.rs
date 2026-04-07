@@ -17,6 +17,7 @@ use crate::models::RemoteProxyStatus;
 use crate::models::RemoteServerConfig;
 use crate::store::account_store_path_from_data_dir;
 use crate::utils::find_command_path;
+use crate::utils::new_background_command;
 use crate::utils::new_resolved_command;
 use crate::utils::now_unix_seconds;
 use crate::utils::prepend_path_entry;
@@ -78,7 +79,7 @@ impl LocalRustToolchain {
     }
 
     fn new_cargo_command(&self) -> Command {
-        let mut command = Command::new(&self.cargo_bin);
+        let mut command = new_background_command(&self.cargo_bin);
         self.apply_to_command(&mut command);
         command
     }

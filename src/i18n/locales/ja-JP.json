@@ -352,14 +352,15 @@
   "updateDialog": {
     "ariaLabel": "アプリ更新",
     "title": "新しいバージョン {{version}} が見つかりました",
-    "subtitle": "現在のバージョン {{currentVersion}}。自動ダウンロードを開始しました。",
+    "subtitle": "現在のバージョン {{currentVersion}}。今すぐインストールするか、あとで対応できます。",
     "close": "更新ダイアログを閉じる",
     "publishedAt": "公開日 {{date}}",
-    "autoDownloading": "自動ダウンロード中...",
-    "autoPaused": "自動ダウンロードが停止または失敗しました。手動で続行できます。",
+    "statusReady": "新しいバージョンを検出しました。自動ダウンロードは開始していません。",
+    "statusInstalling": "更新をダウンロードしてインストールしています...",
     "manualDownload": "手動ダウンロード",
-    "retryAutoDownload": "自動ダウンロードを再試行",
-    "retryingAutoDownload": "自動ダウンロード中..."
+    "skipThisVersion": "このバージョンは通知しない",
+    "installNow": "今すぐインストール",
+    "installingNow": "インストール中..."
   },
   "notices": {
     "settingsUpdated": "設定を更新しました",
@@ -376,7 +377,7 @@
     "updateDownloadFinished": "ダウンロード完了。インストール準備中...",
     "updateInstalling": "インストール完了。再起動中...",
     "updateInstallFailed": "アップデートのインストールに失敗しました: {{error}}",
-    "foundNewVersion": "新しいバージョン {{version}} を検出しました（現在 {{currentVersion}}）。自動ダウンロードを開始しました。",
+    "foundNewVersion": "新しいバージョン {{version}} を検出しました（現在 {{currentVersion}}）。必要なときにインストールできます。",
     "updateCheckFailed": "アップデート確認に失敗しました: {{error}}",
     "openExternalFailed": "外部リンクを開けませんでした: {{error}}",
     "openManualDownloadFailed": "ダウンロードページを開けませんでした: {{error}}",

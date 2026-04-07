@@ -329,6 +329,7 @@ pub(crate) struct AppSettings {
     pub(crate) remote_servers: Vec<RemoteServerConfig>,
     pub(crate) api_proxy_api_key: Option<String>,
     pub(crate) locale: AppLocale,
+    pub(crate) skipped_update_version: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -347,6 +348,7 @@ impl Default for AppSettings {
             remote_servers: Vec::new(),
             api_proxy_api_key: None,
             locale: AppLocale::default(),
+            skipped_update_version: None,
         }
     }
 }
@@ -366,6 +368,7 @@ pub(crate) struct AppSettingsPatch {
     pub(crate) api_proxy_port: Option<u16>,
     pub(crate) remote_servers: Option<Vec<RemoteServerConfig>>,
     pub(crate) locale: Option<AppLocale>,
+    pub(crate) skipped_update_version: Option<Option<String>>,
 }
 
 impl StoredAccount {

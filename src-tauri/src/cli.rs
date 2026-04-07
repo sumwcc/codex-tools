@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::utils::new_background_command;
+
 const INVALID_CONFIGURED_CODEX_PATH_MESSAGE: &str =
     "设置的 Codex 启动路径无效。请填写 codex/codex.exe 的完整路径，或填写包含它的安装目录。";
 
@@ -25,7 +27,7 @@ pub(crate) fn new_codex_command(configured_path: Option<&str>) -> Result<Command
             }
         })?;
 
-    let mut cmd = Command::new(&codex_path);
+    let mut cmd = new_background_command(&codex_path);
 
     if let Some(parent) = codex_path.parent() {
         let path_entries = if let Some(current_path) = env::var_os("PATH") {

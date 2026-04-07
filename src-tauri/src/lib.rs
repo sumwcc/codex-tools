@@ -51,6 +51,8 @@ use models::StartCloudflaredTunnelInput;
 use models::SwitchAccountResult;
 use state::AppState;
 use state::OauthCallbackListenerHandle;
+#[cfg(target_os = "windows")]
+use utils::new_background_command;
 
 const OAUTH_CALLBACK_FINISHED_EVENT: &str = "oauth-callback-finished";
 const AUTH_KEEPALIVE_INTERVAL_SECS: u64 = 300;
@@ -575,18 +577,15 @@ fn open_external_url(url: String) -> Result<(), String> {
         // as command separators unless they are shell-escaped very carefully.
         // Prefer the Windows URL protocol handler so the link goes to the
         // user's default browser instead of opening a File Explorer window.
-        Command::new("rundll32.exe")
+        let mut primary = new_background_command("rundll32.exe");
+        primary
             .args(["url.dll,FileProtocolHandler", &url])
             .spawn()
             .or_else(|primary_error| {
-                Command::new("explorer.exe")
-                    .arg(&url)
-                    .spawn()
-                    .map_err(|fallback_error| {
-                        format!(
-                            "打开外部链接失败: rundll32={primary_error}; explorer={fallback_error}"
-                        )
-                    })
+                let mut fallback = new_background_command("explorer.exe");
+                fallback.arg(&url).spawn().map_err(|fallback_error| {
+                    format!("打开外部链接失败: rundll32={primary_error}; explorer={fallback_error}")
+                })
             })?;
         Ok(())
     }
@@ -1059,7 +1058,7 @@ fn force_stop_running_codex() {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("taskkill")
+        let _ = new_background_command("taskkill")
             .args(["/F", "/IM", "Codex.exe", "/T"])
             .status();
     }

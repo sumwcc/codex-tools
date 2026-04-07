@@ -358,11 +358,12 @@ export type MessageCatalog = {
     subtitle: (currentVersion: string) => string;
     close: string;
     publishedAt: (date: string) => string;
-    autoDownloading: string;
-    autoPaused: string;
+    statusReady: string;
+    statusInstalling: string;
     manualDownload: string;
-    retryAutoDownload: string;
-    retryingAutoDownload: string;
+    skipThisVersion: string;
+    installNow: string;
+    installingNow: string;
   };
   notices: {
     settingsUpdated: string;

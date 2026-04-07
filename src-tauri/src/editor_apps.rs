@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use crate::models::EditorAppId;
 use crate::models::InstalledEditorApp;
+#[cfg(target_os = "windows")]
+use crate::utils::new_background_command;
 
 const RESTART_SETTLE_MS: u64 = 220;
 
@@ -154,7 +156,7 @@ fn force_kill_processes(process_names: &[&str]) {
             } else {
                 format!("{name}.exe")
             };
-            let _ = Command::new("taskkill")
+            let _ = new_background_command("taskkill")
                 .args(["/F", "/IM", &image_name, "/T"])
                 .status();
         }

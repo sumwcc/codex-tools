@@ -352,14 +352,15 @@
   "updateDialog": {
     "ariaLabel": "Обновление приложения",
     "title": "Найдена новая версия {{version}}",
-    "subtitle": "Текущая версия {{currentVersion}}. Автозагрузка уже началась.",
+    "subtitle": "Текущая версия {{currentVersion}}. Можно установить сейчас или вернуться позже.",
     "close": "Закрыть окно обновления",
     "publishedAt": "Опубликовано {{date}}",
-    "autoDownloading": "Автозагрузка...",
-    "autoPaused": "Автозагрузка приостановлена или завершилась ошибкой. Можно продолжить вручную.",
+    "statusReady": "Обнаружена новая версия. Автоматическая загрузка не запускалась.",
+    "statusInstalling": "Загрузка и установка обновления...",
     "manualDownload": "Скачать вручную",
-    "retryAutoDownload": "Повторить автозагрузку",
-    "retryingAutoDownload": "Автозагрузка..."
+    "skipThisVersion": "Больше не напоминать об этой версии",
+    "installNow": "Установить сейчас",
+    "installingNow": "Установка..."
   },
   "notices": {
     "settingsUpdated": "Настройки обновлены",
@@ -376,7 +377,7 @@
     "updateDownloadFinished": "Загрузка завершена, подготовка к установке...",
     "updateInstalling": "Установка завершена, перезапуск...",
     "updateInstallFailed": "Не удалось установить обновление: {{error}}",
-    "foundNewVersion": "Найдена новая версия {{version}} (текущая {{currentVersion}}). Автозагрузка началась.",
+    "foundNewVersion": "Найдена новая версия {{version}} (текущая {{currentVersion}}). Установите её при необходимости.",
     "updateCheckFailed": "Не удалось проверить обновления: {{error}}",
     "openExternalFailed": "Не удалось открыть внешнюю ссылку: {{error}}",
     "openManualDownloadFailed": "Не удалось открыть страницу загрузки: {{error}}",

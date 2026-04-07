@@ -3,7 +3,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::process::Stdio;
 
 use reqwest::Client;
@@ -18,6 +17,7 @@ use crate::models::NamedCloudflaredTunnelInput;
 use crate::models::StartCloudflaredTunnelInput;
 use crate::state::AppState;
 use crate::state::CloudflaredRuntimeHandle;
+use crate::utils::new_background_command;
 use crate::utils::new_resolved_command;
 use crate::utils::now_unix_seconds;
 
@@ -272,7 +272,7 @@ fn spawn_quick_tunnel(
     service_url: &str,
     use_http2: bool,
 ) -> Result<CloudflaredRuntimeHandle, String> {
-    let mut command = Command::new(binary_path);
+    let mut command = new_background_command(binary_path);
     command
         .arg("tunnel")
         .arg("--loglevel")
@@ -329,7 +329,7 @@ async fn spawn_named_tunnel(
     )
     .await?;
 
-    let mut command = Command::new(binary_path);
+    let mut command = new_background_command(binary_path);
     command
         .arg("tunnel")
         .arg("--loglevel")

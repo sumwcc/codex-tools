@@ -206,6 +206,7 @@ export type AppSettings = {
   apiProxyPort: number;
   remoteServers: RemoteServerConfig[];
   locale: AppLocale;
+  skippedUpdateVersion: string | null;
 };
 
 export type UpdateSettingsOptions = {

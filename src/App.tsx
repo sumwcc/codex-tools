@@ -35,6 +35,7 @@ function App() {
         updateProgress,
         pendingUpdate,
         updateDialogOpen,
+        skipPendingUpdateVersion,
         notice,
         openExternalUrl,
         settings,
@@ -152,7 +153,8 @@ function App() {
                     installingUpdate={installingUpdate}
                     onClose={closeUpdateDialog}
                     onManualDownload={() => void openManualDownloadPage()}
-                    onRetryAutoDownload={() => void installPendingUpdate()}
+                    onSkipVersion={() => void skipPendingUpdateVersion()}
+                    onInstallNow={() => void installPendingUpdate()}
                 />
 
                 <section className="viewStage">

@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
@@ -142,9 +143,27 @@ pub(crate) fn find_command_path(command: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|path| is_executable_file(path))
 }
 
+pub(crate) fn configure_background_command(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+}
+
+pub(crate) fn new_background_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let mut command = Command::new(program);
+    configure_background_command(&mut command);
+    command
+}
+
 pub(crate) fn new_resolved_command(command: &str) -> Command {
     let program = find_command_path(command).unwrap_or_else(|| PathBuf::from(command));
-    let mut command = Command::new(&program);
+    let mut command = new_background_command(&program);
     if let Some(parent) = program.parent().filter(|_| program.is_absolute()) {
         if let Some(path_env) = prepend_path_entry(parent) {
             command.env("PATH", path_env);

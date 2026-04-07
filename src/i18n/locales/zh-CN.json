@@ -352,14 +352,15 @@
   "updateDialog": {
     "ariaLabel": "应用更新",
     "title": "发现新版本 {{version}}",
-    "subtitle": "当前版本 {{currentVersion}}，已自动开始下载更新。",
+    "subtitle": "当前版本 {{currentVersion}}，可选择立即安装或稍后处理。",
     "close": "关闭更新弹窗",
     "publishedAt": "发布时间 {{date}}",
-    "autoDownloading": "自动下载中...",
-    "autoPaused": "自动下载已暂停或失败，可手动处理。",
+    "statusReady": "已检测到新版本，暂未自动下载。",
+    "statusInstalling": "正在下载并安装更新...",
     "manualDownload": "手动下载",
-    "retryAutoDownload": "重新自动下载",
-    "retryingAutoDownload": "自动下载中..."
+    "skipThisVersion": "本版本不再提示",
+    "installNow": "立即安装",
+    "installingNow": "下载安装中..."
   },
   "notices": {
     "settingsUpdated": "设置已更新",
@@ -376,7 +377,7 @@
     "updateDownloadFinished": "下载完成，准备安装...",
     "updateInstalling": "安装完成，正在重启...",
     "updateInstallFailed": "安装更新失败：{{error}}",
-    "foundNewVersion": "发现新版本 {{version}}（当前 {{currentVersion}}），已开始自动下载。",
+    "foundNewVersion": "发现新版本 {{version}}（当前 {{currentVersion}}），可按需安装。",
     "updateCheckFailed": "检查更新失败：{{error}}",
     "openExternalFailed": "打开外部链接失败：{{error}}",
     "openManualDownloadFailed": "打开下载页面失败：{{error}}",
