@@ -379,6 +379,7 @@
     "updateInstallFailed": "Не удалось установить обновление: {{error}}",
     "foundNewVersion": "Найдена новая версия {{version}} (текущая {{currentVersion}}). Установите её при необходимости.",
     "updateCheckFailed": "Не удалось проверить обновления: {{error}}",
+    "updateDisabledInDev": "Во время локальной разработки встроенная проверка обновлений отключена.",
     "openExternalFailed": "Не удалось открыть внешнюю ссылку: {{error}}",
     "openManualDownloadFailed": "Не удалось открыть страницу загрузки: {{error}}",
     "addAccountSuccess": "Авторизация успешна. Аккаунт автоматически добавлен и обновлен.",

@@ -381,6 +381,7 @@ export type MessageCatalog = {
     updateInstallFailed: (error: string) => string;
     foundNewVersion: (version: string, currentVersion: string) => string;
     updateCheckFailed: (error: string) => string;
+    updateDisabledInDev: string;
     openExternalFailed: (error: string) => string;
     openManualDownloadFailed: (error: string) => string;
     oauthLinkPrepareFailed: (error: string) => string;
@@ -508,6 +509,7 @@ function compileLocale(raw: RawMessageCatalog): MessageCatalog {
       foundNewVersion: (version, currentVersion) =>
         fillTemplate(raw.notices.foundNewVersion, { version, currentVersion }),
       updateCheckFailed: (error) => fillTemplate(raw.notices.updateCheckFailed, { error }),
+      updateDisabledInDev: raw.notices.updateDisabledInDev,
       openExternalFailed: (error) => fillTemplate(raw.notices.openExternalFailed, { error }),
       openManualDownloadFailed: (error) =>
         fillTemplate(raw.notices.openManualDownloadFailed, { error }),

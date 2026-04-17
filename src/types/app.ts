@@ -25,6 +25,7 @@ export type AccountSummary = {
   label: string;
   email: string | null;
   accountKey: string;
+  variantKey: string;
   accountId: string;
   planType: string | null;
   addedAt: number;
@@ -83,6 +84,7 @@ export type ApiProxyStatus = {
   baseUrl: string | null;
   lanBaseUrl: string | null;
   activeAccountKey: string | null;
+  activeVariantKey: string | null;
   activeAccountId: string | null;
   activeAccountLabel: string | null;
   lastError: string | null;

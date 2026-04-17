@@ -379,6 +379,7 @@
     "updateInstallFailed": "Failed to install update: {{error}}",
     "foundNewVersion": "New version {{version}} found (current {{currentVersion}}). Install when needed.",
     "updateCheckFailed": "Failed to check updates: {{error}}",
+    "updateDisabledInDev": "Built-in app updates are disabled in local development mode.",
     "openExternalFailed": "Failed to open external link: {{error}}",
     "openManualDownloadFailed": "Failed to open download page: {{error}}",
     "addAccountSuccess": "Authorization successful. Account was added and refreshed automatically.",

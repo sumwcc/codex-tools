@@ -33,6 +33,7 @@ function GitHubIcon() {
 type SettingsPanelProps = {
   themeMode: ThemeMode;
   onToggleTheme: () => void;
+  appUpdatesEnabled: boolean;
   checkingUpdate: boolean;
   onCheckUpdate: () => void;
   onOpenExternalUrl: (url: string) => void;
@@ -46,6 +47,7 @@ type SettingsPanelProps = {
 export function SettingsPanel({
   themeMode,
   onToggleTheme,
+  appUpdatesEnabled,
   checkingUpdate,
   onCheckUpdate,
   onOpenExternalUrl,
@@ -293,7 +295,11 @@ export function SettingsPanel({
               <span className="settingInlineValue">{versionValue}</span>
             </div>
             <div className="settingActionGroup">
-              <button className="primary" onClick={onCheckUpdate} disabled={checkingUpdate}>
+              <button
+                className="primary"
+                onClick={onCheckUpdate}
+                disabled={checkingUpdate || !appUpdatesEnabled}
+              >
                 {checkingUpdate ? copy.topBar.checkingUpdate : copy.topBar.checkUpdate}
               </button>
             </div>

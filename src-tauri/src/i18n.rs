@@ -153,10 +153,6 @@ pub(crate) fn tray_current_label(locale: AppLocale) -> &'static str {
     text(locale, &["tray", "currentLabel"])
 }
 
-pub(crate) fn tray_current_account_label(locale: AppLocale) -> &'static str {
-    text(locale, &["tray", "currentAccountLabel"])
-}
-
 pub(crate) fn tray_no_current(locale: AppLocale) -> &'static str {
     text(locale, &["tray", "noCurrent"])
 }
@@ -177,10 +173,6 @@ pub(crate) fn tray_more_accounts(locale: AppLocale, count: usize) -> String {
         text(locale, &["tray", "moreAccounts"]),
         &[("count", count.to_string())],
     )
-}
-
-pub(crate) fn tray_empty_accounts(locale: AppLocale) -> &'static str {
-    text(locale, &["tray", "emptyAccounts"])
 }
 
 pub(crate) fn tray_refresh_now(locale: AppLocale) -> &'static str {

@@ -34,6 +34,7 @@ const EDITOR_SCAN_MS = 60_000;
 const UPDATE_CHECK_MS = 60 * 60 * 1000;
 const API_PROXY_POLL_MS = 4_000;
 const CLOUDFLARED_POLL_MS = 3_000;
+const APP_UPDATES_ENABLED = !import.meta.env.DEV;
 const DEFAULT_SETTINGS: AppSettings = {
   launchAtStartup: false,
   trayUsageDisplayMode: "remaining",
@@ -56,6 +57,7 @@ const DEFAULT_API_PROXY_STATUS: ApiProxyStatus = {
   baseUrl: null,
   lanBaseUrl: null,
   activeAccountKey: null,
+  activeVariantKey: null,
   activeAccountId: null,
   activeAccountLabel: null,
   lastError: null,
@@ -441,6 +443,13 @@ export function useCodexController() {
 
   const installPendingUpdate = useCallback(
     async (knownUpdate?: NonNullable<Awaited<ReturnType<typeof check>>>) => {
+      if (!APP_UPDATES_ENABLED) {
+        setPendingUpdate(null);
+        setUpdateDialogOpen(false);
+        setUpdateProgress(null);
+        return;
+      }
+
       if (installingUpdateRef.current) {
         return;
       }
@@ -496,6 +505,19 @@ export function useCodexController() {
 
   const checkForAppUpdate = useCallback(
     async (quiet = false) => {
+      if (!APP_UPDATES_ENABLED) {
+        setPendingUpdate(null);
+        setUpdateDialogOpen(false);
+        setUpdateProgress(null);
+        if (!quiet) {
+          setNotice({
+            type: "info",
+            message: copy.notices.updateDisabledInDev,
+          });
+        }
+        return;
+      }
+
       if (!quiet) {
         setCheckingUpdate(true);
       }
@@ -615,15 +637,19 @@ export function useCodexController() {
       void loadOpencodeDesktopAppInstalled();
     }, EDITOR_SCAN_MS);
 
-    const updateTimer = setInterval(() => {
-      void checkForAppUpdate(true);
-    }, UPDATE_CHECK_MS);
+    const updateTimer = APP_UPDATES_ENABLED
+      ? setInterval(() => {
+          void checkForAppUpdate(true);
+        }, UPDATE_CHECK_MS)
+      : null;
 
     return () => {
       cancelled = true;
       clearInterval(usageTimer);
       clearInterval(editorTimer);
-      clearInterval(updateTimer);
+      if (updateTimer !== null) {
+        clearInterval(updateTimer);
+      }
     };
   }, [
     checkForAppUpdate,
@@ -1589,6 +1615,7 @@ export function useCodexController() {
     installingCloudflared,
     startingCloudflared,
     stoppingCloudflared,
+    appUpdatesEnabled: APP_UPDATES_ENABLED,
     switchingId,
     renamingAccountId,
     pendingDeleteId,

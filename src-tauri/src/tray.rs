@@ -24,6 +24,13 @@ const TRAY_MENU_OPEN_ID: &str = "tray_open_window";
 const TRAY_MENU_QUIT_ID: &str = "tray_quit";
 
 #[cfg(target_os = "macos")]
+#[derive(Default)]
+struct EffectiveCurrentIdentity {
+    account_key: Option<String>,
+    variant_key: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
 const TRAY_ID: &str = "codex_tools_status_bar";
 #[cfg(target_os = "macos")]
 const TRAY_MENU_REFRESH_ID: &str = "tray_refresh_usage";
@@ -58,6 +65,87 @@ fn read_tray_usage_mode(app: &AppHandle) -> TrayUsageDisplayMode {
     load_store(app)
         .map(|store| store.settings.tray_usage_display_mode)
         .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_effective_current_identity(app: &AppHandle) -> EffectiveCurrentIdentity {
+    let fallback = EffectiveCurrentIdentity {
+        account_key: current_auth_account_key(),
+        variant_key: current_auth_variant_key(),
+    };
+
+    let state = app.state::<AppState>();
+    let shared = {
+        let Ok(api_proxy) = state.api_proxy.try_lock() else {
+            return fallback;
+        };
+        let Some(handle) = api_proxy.as_ref() else {
+            return fallback;
+        };
+        if handle.task.is_finished() {
+            return fallback;
+        }
+        handle.shared.clone()
+    };
+
+    let Ok(snapshot) = shared.try_lock() else {
+        return fallback;
+    };
+
+    if snapshot.active_variant_key.is_some() || snapshot.active_account_key.is_some() {
+        return EffectiveCurrentIdentity {
+            account_key: snapshot.active_account_key.clone(),
+            variant_key: snapshot.active_variant_key.clone(),
+        };
+    }
+
+    fallback
+}
+
+#[cfg(target_os = "macos")]
+fn apply_effective_current_identity(
+    app: &AppHandle,
+    accounts: &[AccountSummary],
+) -> Vec<AccountSummary> {
+    let identity = resolve_effective_current_identity(app);
+
+    accounts
+        .iter()
+        .cloned()
+        .map(|mut account| {
+            account.is_current = identity
+                .variant_key
+                .as_deref()
+                .map(|variant_key| variant_key == account.variant_key.as_str())
+                .or_else(|| {
+                    identity
+                        .account_key
+                        .as_deref()
+                        .map(|account_key| account_key == account.account_key.as_str())
+                })
+                .unwrap_or(false);
+            account
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn load_macos_tray_accounts(app: &AppHandle) -> Result<Vec<AccountSummary>, String> {
+    let store = load_store(app)?;
+    let current_account_key = current_auth_account_key();
+    let current_variant_key = current_auth_variant_key();
+    let summaries: Vec<AccountSummary> = store
+        .accounts
+        .iter()
+        .map(|account| {
+            account.to_summary(
+                current_account_key.as_deref(),
+                current_variant_key.as_deref(),
+            )
+        })
+        .collect();
+
+    Ok(apply_effective_current_identity(app, &summaries))
 }
 
 #[cfg(target_os = "macos")]
@@ -98,30 +186,8 @@ fn tray_account_usage_line(
 }
 
 #[cfg(target_os = "macos")]
-fn build_macos_tray_title(accounts: &[AccountSummary], mode: TrayUsageDisplayMode) -> String {
-    if mode == TrayUsageDisplayMode::Hidden {
-        return String::new();
-    }
-
-    if let Some(current) = accounts.iter().find(|account| account.is_current) {
-        let five_hour = format_percent(mode_percent(
-            mode,
-            current
-                .usage
-                .as_ref()
-                .and_then(|usage| usage.five_hour.as_ref()),
-        ));
-        let one_week = format_percent(mode_percent(
-            mode,
-            current
-                .usage
-                .as_ref()
-                .and_then(|usage| usage.one_week.as_ref()),
-        ));
-        return format!("5h {five_hour} / 1w {one_week}");
-    }
-
-    "5h -- / 1w --".to_string()
+fn build_macos_tray_title(_accounts: &[AccountSummary], _mode: TrayUsageDisplayMode) -> String {
+    String::new()
 }
 
 #[cfg(target_os = "macos")]
@@ -183,57 +249,42 @@ fn build_macos_tray_menu(
     let locale = i18n::app_locale(app);
     let menu = Menu::new(app).map_err(|e| format!("创建状态栏菜单失败: {e}"))?;
 
-    let header_text = format!(
-        "{} ({})",
-        i18n::tray_usage_heading(locale),
-        i18n::tray_usage_mode_label(locale, mode)
-    );
-    let header = MenuItem::with_id(app, "tray_header", header_text, false, None::<&str>)
-        .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
-    menu.append(&header)
-        .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
-
-    let current_line = if let Some(current) = accounts.iter().find(|account| account.is_current) {
-        format!(
-            "{}: {}",
-            i18n::tray_current_account_label(locale),
-            tray_account_usage_line(current, mode, locale)
-        )
-    } else {
-        format!(
-            "{}: {}",
-            i18n::tray_current_account_label(locale),
-            i18n::tray_no_current(locale)
-        )
-    };
-    let current_item = MenuItem::with_id(
+    let open = MenuItem::with_id(
         app,
-        "tray_current_summary",
-        current_line,
-        false,
+        TRAY_MENU_OPEN_ID,
+        i18n::tray_open_app(locale),
+        true,
         None::<&str>,
     )
     .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
-    menu.append(&current_item)
+    let refresh = MenuItem::with_id(
+        app,
+        TRAY_MENU_REFRESH_ID,
+        i18n::tray_refresh_now(locale),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
+    let quit = MenuItem::with_id(
+        app,
+        TRAY_MENU_QUIT_ID,
+        i18n::tray_quit(locale),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
+
+    menu.append(&open)
+        .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
+    menu.append(&refresh)
         .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
 
-    let separator =
-        PredefinedMenuItem::separator(app).map_err(|e| format!("创建状态栏分隔符失败: {e}"))?;
-    menu.append(&separator)
-        .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
-
-    if accounts.is_empty() {
-        let empty = MenuItem::with_id(
-            app,
-            "tray_accounts_empty",
-            i18n::tray_empty_accounts(locale),
-            false,
-            None::<&str>,
-        )
-        .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
-        menu.append(&empty)
+    if !accounts.is_empty() {
+        let separator =
+            PredefinedMenuItem::separator(app).map_err(|e| format!("创建状态栏分隔符失败: {e}"))?;
+        menu.append(&separator)
             .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
-    } else {
+
         for (index, account) in accounts.iter().enumerate() {
             let id = format!("tray_account_{index}");
             let line_item = MenuItem::with_id(
@@ -253,36 +304,6 @@ fn build_macos_tray_menu(
         PredefinedMenuItem::separator(app).map_err(|e| format!("创建状态栏分隔符失败: {e}"))?;
     menu.append(&separator)
         .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
-
-    let refresh = MenuItem::with_id(
-        app,
-        TRAY_MENU_REFRESH_ID,
-        i18n::tray_refresh_now(locale),
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
-    let open = MenuItem::with_id(
-        app,
-        TRAY_MENU_OPEN_ID,
-        i18n::tray_open_app(locale),
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
-    let quit = MenuItem::with_id(
-        app,
-        TRAY_MENU_QUIT_ID,
-        i18n::tray_quit(locale),
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| format!("创建状态栏菜单项失败: {e}"))?;
-
-    menu.append(&refresh)
-        .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
-    menu.append(&open)
-        .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
     menu.append(&quit)
         .map_err(|e| format!("写入状态栏菜单失败: {e}"))?;
 
@@ -296,16 +317,21 @@ pub(crate) fn update_macos_tray_snapshot(
 ) -> Result<(), String> {
     let mode = read_tray_usage_mode(app);
     let locale = i18n::app_locale(app);
+    let resolved_accounts = apply_effective_current_identity(app, accounts);
     let tray = app
         .tray_by_id(TRAY_ID)
         .ok_or_else(|| "状态栏尚未初始化".to_string())?;
 
-    let menu = build_macos_tray_menu(app, accounts, mode)?;
+    let menu = build_macos_tray_menu(app, &resolved_accounts, mode)?;
     tray.set_menu(Some(menu))
         .map_err(|e| format!("更新状态栏菜单失败: {e}"))?;
-    tray.set_title(Some(build_macos_tray_title(accounts, mode)))
+    tray.set_title(Some(build_macos_tray_title(&resolved_accounts, mode)))
         .map_err(|e| format!("更新状态栏标题失败: {e}"))?;
-    tray.set_tooltip(Some(build_macos_tray_tooltip(accounts, mode, locale)))
+    tray.set_tooltip(Some(build_macos_tray_tooltip(
+        &resolved_accounts,
+        mode,
+        locale,
+    )))
         .map_err(|e| format!("更新状态栏提示失败: {e}"))?;
     Ok(())
 }
@@ -320,19 +346,7 @@ pub(crate) fn update_macos_tray_snapshot(
 
 #[cfg(target_os = "macos")]
 pub(crate) fn refresh_macos_tray_snapshot(app: &AppHandle) -> Result<(), String> {
-    let store = load_store(app)?;
-    let current_account_key = current_auth_account_key();
-    let current_variant_key = current_auth_variant_key();
-    let summaries: Vec<AccountSummary> = store
-        .accounts
-        .iter()
-        .map(|account| {
-            account.to_summary(
-                current_account_key.as_deref(),
-                current_variant_key.as_deref(),
-            )
-        })
-        .collect();
+    let summaries = load_macos_tray_accounts(app)?;
     update_macos_tray_snapshot(app, &summaries)
 }
 
@@ -360,19 +374,7 @@ fn setup_macos_status_bar(app: &AppHandle) -> Result<(), String> {
 
     let mode = read_tray_usage_mode(app);
     let locale = i18n::app_locale(app);
-    let store = load_store(app)?;
-    let current_account_key = current_auth_account_key();
-    let current_variant_key = current_auth_variant_key();
-    let summaries: Vec<AccountSummary> = store
-        .accounts
-        .iter()
-        .map(|account| {
-            account.to_summary(
-                current_account_key.as_deref(),
-                current_variant_key.as_deref(),
-            )
-        })
-        .collect();
+    let summaries = load_macos_tray_accounts(app)?;
     let menu = build_macos_tray_menu(app, &summaries, mode)?;
 
     TrayIconBuilder::with_id(TRAY_ID)

@@ -64,6 +64,7 @@ pub(crate) struct AccountSummary {
     pub(crate) label: String,
     pub(crate) email: Option<String>,
     pub(crate) account_key: String,
+    pub(crate) variant_key: String,
     pub(crate) account_id: String,
     pub(crate) plan_type: Option<String>,
     pub(crate) added_at: i64,
@@ -171,6 +172,7 @@ pub(crate) struct ApiProxyStatus {
     pub(crate) base_url: Option<String>,
     pub(crate) lan_base_url: Option<String>,
     pub(crate) active_account_key: Option<String>,
+    pub(crate) active_variant_key: Option<String>,
     pub(crate) active_account_id: Option<String>,
     pub(crate) active_account_label: Option<String>,
     pub(crate) last_error: Option<String>,
@@ -416,8 +418,9 @@ impl StoredAccount {
         current_variant_key: Option<&str>,
     ) -> AccountSummary {
         let account_key = self.account_key();
+        let variant_key = self.variant_key();
         let is_current = current_variant_key
-            .map(|variant_key| variant_key == self.variant_key())
+            .map(|current_variant_key| current_variant_key == variant_key.as_str())
             .unwrap_or_else(|| {
                 current_account_key
                     .map(|key| key == account_key)
@@ -429,6 +432,7 @@ impl StoredAccount {
             label: self.label.clone(),
             email: self.email.clone(),
             account_key,
+            variant_key,
             account_id: self.account_id.clone(),
             plan_type: self.plan_type.clone(),
             added_at: self.added_at,

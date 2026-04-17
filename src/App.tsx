@@ -31,6 +31,7 @@ function App() {
         renamingAccountId,
         pendingDeleteId,
         checkingUpdate,
+        appUpdatesEnabled,
         installingUpdate,
         updateProgress,
         pendingUpdate,
@@ -239,6 +240,7 @@ function App() {
                         <SettingsPanel
                             themeMode={themeMode}
                             onToggleTheme={toggleTheme}
+                            appUpdatesEnabled={appUpdatesEnabled}
                             checkingUpdate={checkingUpdate}
                             onCheckUpdate={() => void checkForAppUpdate(false)}
                             onOpenExternalUrl={(url) => void openExternalUrl(url)}

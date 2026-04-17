@@ -379,6 +379,7 @@
     "updateInstallFailed": "アップデートのインストールに失敗しました: {{error}}",
     "foundNewVersion": "新しいバージョン {{version}} を検出しました（現在 {{currentVersion}}）。必要なときにインストールできます。",
     "updateCheckFailed": "アップデート確認に失敗しました: {{error}}",
+    "updateDisabledInDev": "ローカル開発モードでは内蔵アップデート確認を無効化しています。",
     "openExternalFailed": "外部リンクを開けませんでした: {{error}}",
     "openManualDownloadFailed": "ダウンロードページを開けませんでした: {{error}}",
     "addAccountSuccess": "認証に成功しました。アカウントは自動追加・更新されました。",

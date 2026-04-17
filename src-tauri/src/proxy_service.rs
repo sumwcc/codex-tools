@@ -89,6 +89,8 @@ pub(crate) struct ProxyStorageContext {
     pub(crate) store_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) auth_refresh_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) sync_active_auth_on_refresh: bool,
+    #[cfg(feature = "desktop")]
+    pub(crate) app_handle: Option<AppHandle>,
 }
 
 #[derive(Clone)]
@@ -182,6 +184,8 @@ pub(crate) fn new_proxy_storage_context(
         store_lock,
         auth_refresh_lock,
         sync_active_auth_on_refresh,
+        #[cfg(feature = "desktop")]
+        app_handle: None,
     }
 }
 
@@ -190,12 +194,14 @@ fn app_proxy_storage_context(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<ProxyStorageContext, String> {
-    Ok(new_proxy_storage_context(
+    let mut storage = new_proxy_storage_context(
         app_data_dir(app)?,
         state.store_lock.clone(),
         state.auth_refresh_lock.clone(),
         true,
-    ))
+    );
+    storage.app_handle = Some(app.clone());
+    Ok(storage)
 }
 
 #[cfg(feature = "desktop")]
@@ -2610,10 +2616,18 @@ fn json_error_response(status: StatusCode, message: &str) -> Response<Body> {
 }
 
 async fn update_proxy_target(context: &ProxyContext, candidate: &ProxyCandidate) {
-    let mut snapshot = context.shared.lock().await;
-    snapshot.active_account_key = Some(candidate.account_key.clone());
-    snapshot.active_account_id = Some(candidate.account_id.clone());
-    snapshot.active_account_label = Some(candidate.label.clone());
+    {
+        let mut snapshot = context.shared.lock().await;
+        snapshot.active_account_key = Some(candidate.account_key.clone());
+        snapshot.active_variant_key = Some(candidate.variant_key.clone());
+        snapshot.active_account_id = Some(candidate.account_id.clone());
+        snapshot.active_account_label = Some(candidate.label.clone());
+    }
+
+    #[cfg(feature = "desktop")]
+    if let Some(app) = context.storage.app_handle.as_ref() {
+        let _ = crate::tray::refresh_macos_tray_snapshot(app);
+    }
 }
 
 async fn update_proxy_error(context: &ProxyContext, error: Option<String>) {
@@ -2640,6 +2654,7 @@ async fn status_from_handle_state(handle: ApiProxyHandleState) -> ApiProxyStatus
             base_url: None,
             lan_base_url: None,
             active_account_key: snapshot.active_account_key,
+            active_variant_key: snapshot.active_variant_key,
             active_account_id: snapshot.active_account_id,
             active_account_label: snapshot.active_account_label,
             last_error: snapshot.last_error,
@@ -2652,6 +2667,7 @@ async fn status_from_handle_state(handle: ApiProxyHandleState) -> ApiProxyStatus
             base_url: Some(proxy_base_url(handle.port)),
             lan_base_url: proxy_lan_base_url(handle.port),
             active_account_key: snapshot.active_account_key,
+            active_variant_key: snapshot.active_variant_key,
             active_account_id: snapshot.active_account_id,
             active_account_label: snapshot.active_account_label,
             last_error: snapshot.last_error,
@@ -2667,6 +2683,7 @@ fn stopped_status(api_key: Option<String>, last_error: Option<String>) -> ApiPro
         base_url: None,
         lan_base_url: None,
         active_account_key: None,
+        active_variant_key: None,
         active_account_id: None,
         active_account_label: None,
         last_error,
@@ -2807,7 +2824,25 @@ mod tests {
     }
 
     #[test]
-    fn maps_chat_request_model_alias_to_upstream() {
+    fn accepts_chat_request_with_official_gpt_5_4_name() {
+        let request = json!({
+            "model": "gpt-5.4",
+            "messages": [
+                { "role": "user", "content": "hello" }
+            ]
+        });
+
+        let (payload, _) =
+            convert_openai_chat_request_to_codex(&request).expect("payload should convert");
+
+        assert_eq!(
+            payload.get("model").and_then(|value| value.as_str()),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn maps_chat_request_legacy_model_alias_to_upstream() {
         let request = json!({
             "model": "gpt-5-4",
             "messages": [
@@ -2827,7 +2862,7 @@ mod tests {
     #[test]
     fn accepts_responses_style_input_on_chat_completions_route() {
         let request = json!({
-            "model": "gpt-5-4",
+            "model": "gpt-5.4",
             "input": "hello"
         });
 
@@ -2850,7 +2885,24 @@ mod tests {
     }
 
     #[test]
-    fn maps_responses_request_model_alias_to_upstream() {
+    fn accepts_responses_request_with_official_gpt_5_4_name() {
+        let request = json!({
+            "model": "gpt-5.4",
+            "input": "hello"
+        });
+
+        let (payload, downstream_stream) =
+            normalize_openai_responses_request(request).expect("request should normalize");
+
+        assert!(!downstream_stream);
+        assert_eq!(
+            payload.get("model").and_then(|value| value.as_str()),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn maps_responses_request_legacy_model_alias_to_upstream() {
         let request = json!({
             "model": "gpt-5-4",
             "input": "hello"
